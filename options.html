@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Papu autofill — selectors</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <h1>Papu autofill settings</h1>
+
+      <section class="panel">
+        <h2>API</h2>
+        <p class="muted">Uses production backend. No setup needed.</p>
+        <button type="button" id="testApiBtn" class="btn secondary">Test connection</button>
+        <p class="msg" id="apiMsg" role="status"></p>
+      </section>
+
+      <h2 style="margin-top: 1.5rem;">Per-site CSS selectors</h2>
+      <p class="lead">
+        For each external site hostname, set the CSS selectors used to fill the question stem, each option field (one selector per line, in order), and optionally the correct-answer field.
+      </p>
+
+      <section class="panel">
+        <h2>Hostname</h2>
+        <div class="row">
+          <select id="hostSelect" aria-label="Saved hostnames"></select>
+          <input type="text" id="hostInput" placeholder="e.g. ministry.example.gov" spellcheck="false" />
+          <button type="button" id="useInputBtn" class="btn secondary">Use this host</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Selectors for <span id="hostDisplay">—</span></h2>
+        <p class="muted" style="margin-bottom: 0.5rem;">
+          Open the form page in a tab, enter the hostname below, then click <strong>Auto-detect</strong> to guess selectors.
+        </p>
+        <div class="actions" style="margin-bottom: 1rem;">
+          <button type="button" id="detectBtn" class="btn secondary">Auto-detect from open tab</button>
+          <button type="button" id="presetPepuBtn" class="btn secondary">admin.pepu.krd preset</button>
+          <button type="button" id="presetGenericBtn" class="btn secondary">Generic preset (broad)</button>
+          <button type="button" id="debugBtn" class="btn secondary">Debug: list fields</button>
+          <button type="button" id="copyDebugBtn" class="btn secondary" style="display:none;">Copy output</button>
+          <span id="detectMsg" class="msg"></span>
+          <pre id="debugOutput" style="display:none; max-height:200px; overflow:auto; font-size:11px; margin-top:8px;"></pre>
+          <p class="muted" style="font-size:11px; margin-top:4px;">Share the output above so we can fix selectors.</p>
+        </div>
+        <label class="lbl" for="questionSelector">Question text (stem)</label>
+        <input type="text" id="questionSelector" placeholder="#question-body, textarea[name=&quot;stem&quot;], ..." spellcheck="false" />
+
+        <label class="lbl" for="optionSelectors">Option fields — one CSS selector per line (order matches JSON options[])</label>
+        <textarea id="optionSelectors" rows="6" placeholder="#opt1&#10;#opt2&#10;#opt3&#10;#opt4" spellcheck="false"></textarea>
+
+        <label class="lbl" for="correctAnswerSelector">Correct answer field (optional)</label>
+        <input type="text" id="correctAnswerSelector" placeholder="select or input for correct answer" spellcheck="false" />
+        <label class="lbl" for="correctCheckboxSelectors">Correct-answer checkboxes (one per option, admin.pepu.krd style)</label>
+        <textarea id="correctCheckboxSelectors" rows="4" placeholder="One selector per line, in option order. Leave empty if using field above." spellcheck="false"></textarea>
+
+        <div class="actions">
+          <button type="button" id="saveBtn" class="btn primary">Save for this host</button>
+          <button type="button" id="deleteBtn" class="btn danger">Remove host</button>
+        </div>
+        <p class="msg" id="saveMsg" role="status"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Import / export mapping JSON</h2>
+        <p class="muted">
+          Format: <code>{ "hostname": { "questionSelector": "...", "optionSelectors": ["..."], "correctAnswerSelector": "..." } }</code>
+        </p>
+        <textarea id="mappingJson" rows="8" spellcheck="false"></textarea>
+        <div class="actions">
+          <button type="button" id="importBtn" class="btn secondary">Merge import</button>
+          <button type="button" id="exportBtn" class="btn secondary">Export all</button>
+        </div>
+        <p class="msg" id="importMsg" role="status"></p>
+      </section>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

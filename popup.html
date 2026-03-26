@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ku" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>پەپوو — پڕکردنەوەی خۆکار</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="hdr">
+      <h1>پەپوو — پڕکردنەوەی خۆکار</h1>
+      <p class="host" id="hostLabel">—</p>
+      <a class="link" id="optsLink" href="#" target="_blank" rel="noopener">ڕێکخستنەکان</a>
+    </header>
+
+    <section class="panel" id="apiConfigSection">
+      <p class="muted" id="apiConfigHint">پێویستە API ڕێکبخەیت. <a id="optsLinkConfig" href="#">ڕێکخستنەکان</a></p>
+    </section>
+
+    <section class="panel row" id="filtersSection" style="display:none;">
+      <div class="field">
+        <label class="lbl" for="filterSubject">بابەت</label>
+        <select id="filterSubject"></select>
+      </div>
+      <div class="field">
+        <label class="lbl" for="filterYear">ساڵ</label>
+        <select id="filterYear"></select>
+      </div>
+    </section>
+    <section class="panel row" id="periodSection" style="display:none;">
+      <div class="field">
+        <label class="lbl" for="filterPeriod">قۆناغ</label>
+        <select id="filterPeriod"></select>
+      </div>
+    </section>
+    <section class="panel row" id="unitSection" style="display:none;">
+      <div class="field">
+        <label class="lbl" for="filterUnit">بەند</label>
+        <select id="filterUnit"></select>
+      </div>
+    </section>
+
+    <section class="panel">
+      <label class="lbl" for="searchInput">گەڕان</label>
+      <input type="search" id="searchInput" placeholder="دەقی پرسیار..." dir="rtl" />
+      <button type="button" id="openBrowserBtn" class="btn secondary" style="margin-top: 8px;">بازدەری پرسیار →</button>
+    </section>
+
+    <section class="panel list-wrap">
+      <p class="muted" id="emptyHint">بابەت و ساڵ هەڵبژێرە بۆ بارکردنی پرسیارەکان.</p>
+      <p class="muted" id="loadErr" style="display:none; color:#fca5a5;"></p>
+      <ul id="qList" class="q-list"></ul>
+      <button type="button" id="fillNextBtn" class="btn secondary" disabled style="margin-top: 0.5rem;">پڕکردنەوەی جاری داهاتوو</button>
+    </section>
+
+    <p class="status" id="status"></p>
+
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

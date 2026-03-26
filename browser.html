@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ku" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>پەپوو — Browser</title>
+  <link rel="stylesheet" href="browser.css">
+</head>
+<body>
+  <header class="hdr">
+    <h1>پەپوو — پرسیار</h1>
+    <a id="optsLink" href="#" target="_blank" class="settings-link">ڕێکخستنەکان</a>
+  </header>
+
+  <aside class="filters">
+    <h2>فلتەرەکان</h2>
+    <label>بابەت</label>
+    <select id="filterSubject"></select>
+    <label>ساڵ</label>
+    <select id="filterYear"></select>
+    <label>قۆناغ</label>
+    <select id="filterPeriod"></select>
+    <div id="unitFilterWrapper" style="display:none;">
+      <label>بەند</label>
+      <select id="filterUnit"></select>
+    </div>
+    <label>گەڕان</label>
+    <input type="search" id="searchInput" placeholder="گەڕان...">
+  </aside>
+
+  <main class="questions">
+    <div class="toolbar">
+      <span id="countLabel">0 پرسیار</span>
+    </div>
+    <div id="questionsList"></div>
+  </main>
+
+  <script src="browser.js" type="module"></script>
+</body>
+</html>
