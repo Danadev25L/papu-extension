@@ -143,6 +143,9 @@ function renderQuestions() {
         questionText: q.questionText,
         options: q.options || [],
         correctAnswer: q.correctAnswer || "",
+        unitId: q.unitId || q.unitId2 || undefined,
+        unitNumber: q.unitNumber || q.unitNumber2 || undefined,
+        unitNameKu: q.unitNameKu || undefined,
       });
       if (res?.ok) {
         fillBtn.textContent = "✓ پڕکرا";
@@ -162,6 +165,9 @@ function renderQuestions() {
           questionText: q.questionText,
           options: q.options || [],
           correctAnswer: q.correctAnswer || "",
+          unitId: q.unitId || q.unitId2 || undefined,
+          unitNumber: q.unitNumber || q.unitNumber2 || undefined,
+          unitNameKu: q.unitNameKu || undefined,
         });
         renderQuestions();
       }
@@ -176,11 +182,40 @@ async function loadSubjects() {
   return data.subjects || [];
 }
 
+async function loadUnitsFromForm() {
+  // Fetch units from the admin.pepu.krd form dropdown
+  try {
+    const tabs = await chrome.tabs.query({});
+    const adminTab = tabs.find(t =>
+      t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
+    );
+
+    if (adminTab) {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: adminTab.id },
+        func: () => {
+          const unitSelect = document.querySelector('select[name="Question.UnitId"]');
+          if (!unitSelect) return [];
+          return Array.from(unitSelect.options).map(opt => ({
+            value: opt.value,
+            label: opt.textContent || opt.value || "Unknown"
+          })).filter(u => u.value && u.value !== "");
+        },
+      });
+      if (results && results[0] && results[0].result) {
+        return results[0].result;
+      }
+    }
+  } catch (e) {
+    console.log("Could not fetch units from form:", e);
+  }
+  return [];
+}
+
 async function loadUnits(subjectId) {
   if (!subjectId) return [];
-  const params = new URLSearchParams({ subjectId });
-  const data = await apiFetch(`/rag/units?${params}`);
-  return data.units || [];
+  // Load units from the form dropdown
+  return await loadUnitsFromForm();
 }
 
 async function loadQuestions() {
@@ -219,6 +254,21 @@ async function init() {
   const hostname = adminTab ? new URL(adminTab.url).hostname : "admin.pepu.krd";
   const optsUrl = chrome.runtime.getURL("options.html") + (hostname ? `?host=${encodeURIComponent(hostname)}` : "");
   document.getElementById("optsLink").href = optsUrl;
+
+  // Load units from form
+  try {
+    const units = await loadUnitsFromForm();
+    fillSelect(
+      document.getElementById("filterUnit"),
+      [{ value: "", label: "هەڵبژێرە بەند" }, ...units],
+      false
+    );
+    if (units.length === 0) {
+      document.getElementById("unitFilterWrapper").style.display = "none";
+    }
+  } catch (e) {
+    console.log("Failed to load units:", e);
+  }
 
   try {
     state.subjects = await loadSubjects();
@@ -266,13 +316,69 @@ async function init() {
     refreshQuestions();
   });
 
-  document.getElementById("filterUnit").addEventListener("change", (e) => {
+  document.getElementById("filterUnit").addEventListener("change", async (e) => {
     state.unitId = e.target.value;
-    refreshQuestions();
+    const selectedValue = e.target.value;
+    console.log("Unit selected in UI:", selectedValue);
+
+    // Sync to admin.pepu.krd form
+    if (selectedValue) {
+      try {
+        const tabs = await chrome.tabs.query({});
+        console.log("All tabs:", tabs.map(t => ({ id: t.id, url: t.url })));
+        const adminTab = tabs.find(t =>
+          t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
+        );
+        console.log("Admin tab:", adminTab);
+        if (adminTab) {
+          const result = await chrome.scripting.executeScript({
+            target: { tabId: adminTab.id },
+            func: (unitId) => {
+              const unitSelect = document.querySelector('select[name="Question.UnitId"]');
+              console.log("Unit select found:", unitSelect);
+              if (unitSelect) {
+                console.log("Setting to:", unitId);
+                unitSelect.value = unitId;
+                unitSelect.dispatchEvent(new Event("change", { bubbles: true }));
+                console.log("New value:", unitSelect.value);
+                return { success: true, newValue: unitSelect.value };
+              }
+              return { success: false, error: "No select found" };
+            },
+            args: [selectedValue]
+          });
+          console.log("Sync result:", result);
+        } else {
+          console.log("No admin tab found");
+        }
+      } catch (err) {
+        console.log("Failed to sync unit:", err);
+      }
+    }
   });
 
-  // Hide unit filter initially
-  document.getElementById("unitFilterWrapper").style.display = "none";
+  // Refresh units from form button
+  document.getElementById("refreshUnitsBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("refreshUnitsBtn");
+    const originalText = btn.textContent;
+    btn.textContent = "⏳...";
+    try {
+      const units = await loadUnitsFromForm();
+      fillSelect(
+        document.getElementById("filterUnit"),
+        [{ value: "", label: "هەڵبژێرە بەند" }, ...units],
+        false
+      );
+      if (units.length > 0) {
+        document.getElementById("unitFilterWrapper").style.display = "block";
+      }
+      btn.textContent = "✓ Done!";
+      setTimeout(() => { btn.textContent = originalText; }, 1500);
+    } catch (e) {
+      btn.textContent = "Error!";
+      setTimeout(() => { btn.textContent = originalText; }, 1500);
+    }
+  });
 
   document.getElementById("searchInput").addEventListener("input", renderQuestions);
 }

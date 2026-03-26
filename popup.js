@@ -96,6 +96,9 @@ function renderList() {
       questionText: q.questionText,
       options: q.options || [],
       correctAnswer: q.correctAnswer || "",
+      unitId: q.unitId || q.unitId2 || undefined,
+      unitNumber: q.unitNumber || q.unitNumber2 || undefined,
+      unitNameKu: q.unitNameKu || undefined,
     });
     li.innerHTML = `<span>#${q.questionNumber}</span> — ${escapeHtml((q.questionText || "").slice(0, 120))}${(q.questionText || "").length > 120 ? "…" : ""}<small>${(q.options || []).length} هەڵبژاردن</small>`;
     li.addEventListener("click", () => {
@@ -129,9 +132,42 @@ async function loadSubjects() {
 
 async function loadUnits(subjectId) {
   if (!subjectId) return [];
+
+  // First, try to fetch units from the admin.pepu.krd form dropdown
+  try {
+    const tabs = await chrome.tabs.query({});
+    const adminTab = tabs.find(t =>
+      t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
+    );
+
+    if (adminTab) {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: adminTab.id },
+        func: () => {
+          const unitSelect = document.querySelector('select[name="Question.UnitId"]');
+          if (!unitSelect) return { error: "No dropdown found" };
+          const options = Array.from(unitSelect.options).map(opt => ({
+            value: opt.value,
+            label: opt.textContent || opt.value || "Unknown"
+          }));
+          return { options, count: options.length };
+        },
+      });
+      if (results && results[0] && results[0].result && results[0].result.options) {
+        return results[0].result.options.filter(u => u.value && u.value !== "");
+      }
+    }
+  } catch (e) {
+    console.log("Could not fetch units from form:", e);
+  }
+
+  // Fallback: fetch from API
   const params = new URLSearchParams({ subjectId });
   const data = await apiFetch(`/rag/units?${params}`);
-  return data.units || [];
+  return (data.units || []).map(u => ({
+    value: u.id,
+    label: `${u.unit_number} — ${u.name_ku || u.name}`
+  }));
 }
 
 async function loadQuestions() {
@@ -287,6 +323,9 @@ async function init() {
       questionText: q.questionText,
       options: q.options || [],
       correctAnswer: q.correctAnswer || "",
+      unitId: q.unitId || q.unitId2 || undefined,
+      unitNumber: q.unitNumber || q.unitNumber2 || undefined,
+      unitNameKu: q.unitNameKu || undefined,
     });
   });
 
