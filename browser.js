@@ -27,6 +27,9 @@ let state = {
   unitId: ""
 };
 
+// Track filled question temporarily (for green flash effect)
+let filledQuestionId = null;
+
 async function apiFetch(path) {
   const fullUrl = `${API_URL}${path.startsWith("/") ? path : "/" + path}`;
   const res = await fetch(fullUrl, { credentials: "omit" });
@@ -35,14 +38,8 @@ async function apiFetch(path) {
   return data;
 }
 
-function fillSelect(sel, options, includeAll = false) {
+function fillSelect(sel, options) {
   sel.innerHTML = "";
-  if (includeAll) {
-    const o = document.createElement("option");
-    o.value = ALL;
-    o.textContent = "هەموو";
-    sel.appendChild(o);
-  }
   for (const v of options) {
     const o = document.createElement("option");
     o.value = typeof v === "object" ? v.value : v;
@@ -67,35 +64,51 @@ function filteredQuestions() {
   );
 }
 
-let lastFilledQuestionId = null;
-
-async function fillActive(payload) {
+async function fillActive(payload, cardElement) {
   try {
-    // Find the admin.pepu.krd tab (not this browser page)
     const tabs = await chrome.tabs.query({});
-    console.log("All tabs:", tabs.map(t => ({ id: t.id, url: t.url })));
     const targetTab = tabs.find(t =>
       t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
     );
 
     if (!targetTab) {
-      console.error("admin.pepu.krd tab not found");
-      return { ok: false, error: "admin.pepu.krd تاب نەدۆزرایەوە. تکایە پەڕەکە بکەرەوە." };
+      showToast("admin.pepu.krd تاب نەدۆزرایەوە", "error");
+      return { ok: false, error: "Tab not found" };
     }
 
-    console.log("Target tab:", targetTab.id, targetTab.url);
-    // Send message directly with the target tab ID
     const res = await chrome.runtime.sendMessage({
       type: "FILL_SPECIFIC_TAB",
       tabId: targetTab.id,
       payload
     });
-    console.log("Fill result:", res);
+
+    if (res?.ok) {
+      showToast("✓ پڕکرایەوە!", "success");
+      // Show green temporarily
+      if (cardElement) {
+        cardElement.classList.add("filled");
+        setTimeout(() => {
+          cardElement.classList.remove("filled");
+        }, 1500);
+      }
+    } else {
+      showToast(res?.error || "هەڵە", "error");
+    }
     return res;
   } catch (e) {
     console.error("Fill error:", e);
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    showToast(e instanceof Error ? e.message : String(e), "error");
+    return { ok: false, error: String(e) };
   }
+}
+
+function showToast(message, type = "success") {
+  const toast = document.getElementById("toast");
+  toast.textContent = message;
+  toast.className = `toast ${type} show`;
+  setTimeout(() => {
+    toast.className = "toast";
+  }, 2500);
 }
 
 function renderQuestions() {
@@ -103,8 +116,7 @@ function renderQuestions() {
   const countLabel = document.getElementById("countLabel");
   container.innerHTML = "";
   const items = filteredQuestions();
-  countLabel.textContent = `${items.length} / ${state.questions.length}`;
-  countLabel.title = `${items.length} پرسیاری لیتر (لە کۆی ${state.questions.length})`;
+  countLabel.textContent = `${items.length} پرسیار`;
 
   if (items.length === 0) {
     container.innerHTML = `<p class="empty">هیچ پرسیارێک نەدۆزرایەوە.</p>`;
@@ -113,64 +125,35 @@ function renderQuestions() {
 
   items.forEach((q) => {
     const card = document.createElement("div");
-    card.className = "q-card clickable";
-    const isLastFilled = lastFilledQuestionId === q.id;
-    if (isLastFilled) card.classList.add("last-filled");
+    card.className = "q-card";
+
+    const unitLabel = q.unitNameKu || (q.unitNumber ? `بەند ${q.unitNumber}` : "");
+    const yearLabel = q.examYear || "";
 
     card.innerHTML = `
-      <div class="q-content">
-        <div class="q-header">
-          <span class="q-number">#${q.questionNumber}</span>
-          ${q.unitNameKu ? `<span class="q-unit">${escapeHtml(q.unitNameKu)}</span>` : ""}
-          ${isLastFilled ? `<span class="q-filled-badge">✓ پڕکرا</span>` : ""}
+      <div class="q-header">
+        <span class="q-number">#${q.questionNumber}</span>
+        <div class="q-meta">
+          ${unitLabel ? `<span class="q-unit">${escapeHtml(unitLabel)}</span>` : ""}
+          ${yearLabel ? `<span class="q-year">${yearLabel}</span>` : ""}
         </div>
-        <p class="q-text">${escapeHtml(q.questionText || "")}</p>
-        ${(q.options || []).length > 0 ? `
-          <div class="q-options">
-            ${(q.options || []).slice(0, 4).map(opt => `<span class="q-opt">${escapeHtml(opt).slice(0, 50)}${opt.length > 50 ? "..." : ""}</span>`).join("")}
-          </div>
-        ` : ""}
-        <button class="fill-btn">پڕکردنەوە</button>
       </div>
+      <p class="q-text">${escapeHtml((q.questionText || "").slice(0, 200))}${(q.questionText || "").length > 200 ? "..." : ""}</p>
+      ${(q.options || []).length > 0 ? `
+        <div class="q-options">
+          ${(q.options || []).slice(0, 4).map(opt => `<span class="q-opt">${escapeHtml(opt).slice(0, 40)}${opt.length > 40 ? "..." : ""}</span>`).join("")}
+        </div>
+      ` : ""}
     `;
 
-    // Fill button click
-    const fillBtn = card.querySelector('.fill-btn');
-    fillBtn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      lastFilledQuestionId = q.id;
-      const res = await fillActive({
+    // Click to fill (shows green temporarily, then back to normal)
+    card.addEventListener("click", async () => {
+      await fillActive({
+        questionId: q.id,
         questionText: q.questionText,
         options: q.options || [],
         correctAnswer: q.correctAnswer || "",
-        unitId: q.unitId || q.unitId2 || undefined,
-        unitNumber: q.unitNumber || q.unitNumber2 || undefined,
-        unitNameKu: q.unitNameKu || undefined,
-      });
-      if (res?.ok) {
-        fillBtn.textContent = "✓ پڕکرا";
-        setTimeout(() => { fillBtn.textContent = "پڕکردنەوە"; }, 1500);
-      } else {
-        fillBtn.textContent = "هەڵە";
-        setTimeout(() => { fillBtn.textContent = "پڕکردنەوە"; }, 2000);
-      }
-      renderQuestions();
-    });
-
-    // Card click also fills
-    card.addEventListener("click", async (e) => {
-      if (e.target !== fillBtn) {
-        lastFilledQuestionId = q.id;
-        const res = await fillActive({
-          questionText: q.questionText,
-          options: q.options || [],
-          correctAnswer: q.correctAnswer || "",
-          unitId: q.unitId || q.unitId2 || undefined,
-          unitNumber: q.unitNumber || q.unitNumber2 || undefined,
-          unitNameKu: q.unitNameKu || undefined,
-        });
-        renderQuestions();
-      }
+      }, card);
     });
 
     container.appendChild(card);
@@ -183,7 +166,6 @@ async function loadSubjects() {
 }
 
 async function loadUnitsFromForm() {
-  // Fetch units from the admin.pepu.krd form dropdown
   try {
     const tabs = await chrome.tabs.query({});
     const adminTab = tabs.find(t =>
@@ -212,22 +194,13 @@ async function loadUnitsFromForm() {
   return [];
 }
 
-async function loadUnits(subjectId) {
-  if (!subjectId) return [];
-  // Load units from the form dropdown
-  return await loadUnitsFromForm();
-}
-
 async function loadQuestions() {
   const params = new URLSearchParams();
   if (state.examYear && state.examYear !== ALL) params.set("examYear", state.examYear);
   if (state.examPeriod && state.examPeriod !== ALL) params.set("examPeriod", state.examPeriod);
-  if (state.unitId) params.set("unitId", state.unitId);
   const qs = params.toString();
   const path = `/extension/subjects/${state.subjectId}/questions${qs ? "?" + qs : ""}`;
-  console.log("Loading questions:", path);
   const data = await apiFetch(path);
-  console.log("Loaded questions count:", data.questions?.length || 0);
   return data.questions || [];
 }
 
@@ -255,21 +228,7 @@ async function init() {
   const optsUrl = chrome.runtime.getURL("options.html") + (hostname ? `?host=${encodeURIComponent(hostname)}` : "");
   document.getElementById("optsLink").href = optsUrl;
 
-  // Load units from form
-  try {
-    const units = await loadUnitsFromForm();
-    fillSelect(
-      document.getElementById("filterUnit"),
-      [{ value: "", label: "هەڵبژێرە بەند" }, ...units],
-      false
-    );
-    if (units.length === 0) {
-      document.getElementById("unitFilterWrapper").style.display = "none";
-    }
-  } catch (e) {
-    console.log("Failed to load units:", e);
-  }
-
+  // Load subjects
   try {
     state.subjects = await loadSubjects();
     fillSelect(
@@ -283,26 +242,31 @@ async function init() {
       [{ value: "", label: "هەموو" }, ...EXAM_PERIODS.filter((p) => p.value)],
       false
     );
-    fillSelect(document.getElementById("filterUnit"), [{ value: "", label: "هەموو بەندەکان" }], false);
+    fillSelect(document.getElementById("filterUnit"), [{ value: "", label: "هەڵبژێرە بەند" }], false);
   } catch (e) {
     console.error("Failed to load subjects:", e);
   }
 
+  // Load units from form
+  try {
+    const units = await loadUnitsFromForm();
+    if (units.length > 0) {
+      fillSelect(
+        document.getElementById("filterUnit"),
+        [{ value: "", label: "هەڵبژێرە بەند" }, ...units],
+        false
+      );
+    } else {
+      document.getElementById("unitFilterWrapper").style.display = "none";
+    }
+  } catch (e) {
+    console.log("Failed to load units:", e);
+    document.getElementById("unitFilterWrapper").style.display = "none";
+  }
+
+  // Event listeners
   document.getElementById("filterSubject").addEventListener("change", async (e) => {
     state.subjectId = e.target.value;
-    state.unitId = "";
-    // Load and populate units
-    const units = await loadUnits(state.subjectId);
-    fillSelect(
-      document.getElementById("filterUnit"),
-      [{ value: "", label: "هەموو بەندەکان" }, ...units.map(u => ({
-        value: u.id,
-        label: `${u.unit_number} — ${u.name_ku || u.name}`
-      }))],
-      false
-    );
-    // Show/hide unit filter based on whether units exist
-    document.getElementById("unitFilterWrapper").style.display = units.length ? "block" : "none";
     refreshQuestions();
   });
 
@@ -318,38 +282,25 @@ async function init() {
 
   document.getElementById("filterUnit").addEventListener("change", async (e) => {
     state.unitId = e.target.value;
-    const selectedValue = e.target.value;
-    console.log("Unit selected in UI:", selectedValue);
-
     // Sync to admin.pepu.krd form
-    if (selectedValue) {
+    if (e.target.value) {
       try {
         const tabs = await chrome.tabs.query({});
-        console.log("All tabs:", tabs.map(t => ({ id: t.id, url: t.url })));
         const adminTab = tabs.find(t =>
           t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
         );
-        console.log("Admin tab:", adminTab);
         if (adminTab) {
-          const result = await chrome.scripting.executeScript({
+          await chrome.scripting.executeScript({
             target: { tabId: adminTab.id },
             func: (unitId) => {
               const unitSelect = document.querySelector('select[name="Question.UnitId"]');
-              console.log("Unit select found:", unitSelect);
               if (unitSelect) {
-                console.log("Setting to:", unitId);
                 unitSelect.value = unitId;
                 unitSelect.dispatchEvent(new Event("change", { bubbles: true }));
-                console.log("New value:", unitSelect.value);
-                return { success: true, newValue: unitSelect.value };
               }
-              return { success: false, error: "No select found" };
             },
-            args: [selectedValue]
+            args: [e.target.value]
           });
-          console.log("Sync result:", result);
-        } else {
-          console.log("No admin tab found");
         }
       } catch (err) {
         console.log("Failed to sync unit:", err);
@@ -357,7 +308,8 @@ async function init() {
     }
   });
 
-  // Refresh units from form button
+  document.getElementById("searchInput").addEventListener("input", renderQuestions);
+
   document.getElementById("refreshUnitsBtn").addEventListener("click", async () => {
     const btn = document.getElementById("refreshUnitsBtn");
     const originalText = btn.textContent;
@@ -370,7 +322,7 @@ async function init() {
         false
       );
       if (units.length > 0) {
-        document.getElementById("unitFilterWrapper").style.display = "block";
+        document.getElementById("unitFilterWrapper").style.display = "flex";
       }
       btn.textContent = "✓ Done!";
       setTimeout(() => { btn.textContent = originalText; }, 1500);
@@ -379,8 +331,6 @@ async function init() {
       setTimeout(() => { btn.textContent = originalText; }, 1500);
     }
   });
-
-  document.getElementById("searchInput").addEventListener("input", renderQuestions);
 }
 
 init();

@@ -3,38 +3,57 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>پەپوو — Browser</title>
+  <title>پەپوو — پرسیار</title>
   <link rel="stylesheet" href="browser.css">
 </head>
 <body>
-  <header class="hdr">
-    <h1>پەپوو — پرسیار</h1>
-    <a id="optsLink" href="#" target="_blank" class="settings-link">ڕێکخستنەکان</a>
+  <header class="header">
+    <div class="header-content">
+      <h1>پەپوو</h1>
+      <p class="header-subtitle">پڕکردنەوەی خۆکاری پرسیار</p>
+    </div>
+    <a id="optsLink" href="#" class="settings-btn" target="_blank">ڕێکخستنەکان</a>
   </header>
 
-  <aside class="filters">
-    <h2>فلتەرەکان</h2>
-    <label>بابەت</label>
-    <select id="filterSubject"></select>
-    <label>ساڵ</label>
-    <select id="filterYear"></select>
-    <label>قۆناغ</label>
-    <select id="filterPeriod"></select>
-    <div id="unitFilterWrapper">
-      <label>بەند (Unit)</label>
-      <select id="filterUnit"></select>
-      <button id="refreshUnitsBtn" class="btn secondary" style="margin-top:4px;">🔄Reload</button>
-    </div>
-    <label>گەڕان</label>
-    <input type="search" id="searchInput" placeholder="گەڕان...">
-  </aside>
+  <div class="container">
+    <aside class="sidebar">
+      <div class="filter-group">
+        <label>بابەت</label>
+        <select id="filterSubject" class="select"></select>
+      </div>
 
-  <main class="questions">
-    <div class="toolbar">
-      <span id="countLabel">0 پرسیار</span>
-    </div>
-    <div id="questionsList"></div>
-  </main>
+      <div class="filter-group">
+        <label>ساڵ</label>
+        <select id="filterYear" class="select"></select>
+      </div>
+
+      <div class="filter-group">
+        <label>قۆناغ</label>
+        <select id="filterPeriod" class="select"></select>
+      </div>
+
+      <div class="filter-group" id="unitFilterWrapper">
+        <label>بەند (Unit)</label>
+        <select id="filterUnit" class="select"></select>
+        <button id="refreshUnitsBtn" class="btn-secondary">🔄 Reload</button>
+      </div>
+
+      <div class="filter-group">
+        <label>گەڕان</label>
+        <input type="search" id="searchInput" class="input" placeholder="گەڕان...">
+      </div>
+
+      <div class="stats">
+        <span id="countLabel">0 پرسیار</span>
+      </div>
+    </aside>
+
+    <main class="questions">
+      <div id="questionsList" class="questions-grid"></div>
+    </main>
+  </div>
+
+  <div id="toast" class="toast"></div>
 
   <script src="browser.js" type="module"></script>
 </body>
