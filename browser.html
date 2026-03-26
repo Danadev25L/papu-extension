@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>پەپوو — پرسیار</title>
   <link rel="stylesheet" href="browser.css">
+  <!-- Choices.js for better dropdowns -->
+  <script src="https://cdn.jsdelivr.net/npm/choices.js/public/assets/scripts/choices.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/choices.js/public/assets/styles/choices.min.css">
 </head>
 <body>
   <header class="header">
@@ -19,22 +22,22 @@
     <aside class="sidebar">
       <div class="filter-group">
         <label>بابەت</label>
-        <select id="filterSubject" class="select"></select>
+        <select id="filterSubject"></select>
       </div>
 
       <div class="filter-group">
         <label>ساڵ</label>
-        <select id="filterYear" class="select"></select>
+        <select id="filterYear"></select>
       </div>
 
       <div class="filter-group">
         <label>قۆناغ</label>
-        <select id="filterPeriod" class="select"></select>
+        <select id="filterPeriod"></select>
       </div>
 
       <div class="filter-group" id="unitFilterWrapper">
         <label>بەند (Unit)</label>
-        <select id="filterUnit" class="select"></select>
+        <select id="filterUnit"></select>
         <button id="refreshUnitsBtn" class="btn-secondary">🔄 Reload</button>
       </div>
 

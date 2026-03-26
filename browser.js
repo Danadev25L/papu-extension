@@ -84,12 +84,9 @@ async function fillActive(payload, cardElement) {
 
     if (res?.ok) {
       showToast("✓ پڕکرایەوە!", "success");
-      // Show green temporarily
+      // Toggle green - if green, remove it; if not green, add it
       if (cardElement) {
-        cardElement.classList.add("filled");
-        setTimeout(() => {
-          cardElement.classList.remove("filled");
-        }, 1500);
+        cardElement.classList.toggle("filled");
       }
     } else {
       showToast(res?.error || "هەڵە", "error");
@@ -218,6 +215,29 @@ async function refreshQuestions() {
     state.questions = [];
     renderQuestions();
   }
+}
+
+let choicesInstances = {};
+
+function initChoices(id, placeholder = "هەڵبژێرە...") {
+  const element = document.getElementById(id);
+  if (!element) return;
+
+  // Destroy existing instance if any
+  if (choicesInstances[id]) {
+    choicesInstances[id].destroy();
+  }
+
+  // Create new Choices instance
+  choicesInstances[id] = new Choices(element, {
+    placeholder: placeholder,
+    searchEnabled: true,
+    shouldSort: false,
+    itemSelectText: true,
+    position: "bottom",
+    allowHTML: false,
+    resetScrollPosition: true,
+  });
 }
 
 async function init() {
