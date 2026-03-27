@@ -354,3 +354,116 @@ body {
     padding: 16px;
   }
 }
+
+/* Bulk Create Section */
+.bulk-section {
+  margin-top: 16px;
+  padding: 12px;
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bulk-info {
+  text-align: center;
+  font-size: 13px;
+  color: var(--primary);
+  font-weight: 500;
+}
+
+.btn-bulk {
+  background: var(--primary);
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.btn-bulk:hover {
+  background: #7c3aed;
+  transform: translateY(-1px);
+}
+
+.btn-bulk:disabled {
+  background: #6b7280;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Bulk Progress */
+.bulk-progress {
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.progress-text {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.progress-bar {
+  height: 6px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--success);
+  transition: width 0.3s;
+  width: 0%;
+}
+
+/* Question Checkbox */
+.q-checkbox {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  z-index: 10;
+  accent-color: var(--primary);
+}
+
+.q-card.has-checkbox {
+  padding-top: 36px;
+}
+
+.q-card.selected {
+  border-color: var(--primary) !important;
+  background: rgba(139, 92, 246, 0.15) !important;
+  box-shadow: 0 0 0 2px var(--primary);
+}
+
+.q-card.bulk-done {
+  opacity: 0.5;
+  background: rgba(34, 197, 94, 0.1) !important;
+}
+
+.q-card.bulk-done .q-number {
+  color: var(--success);
+}
+
+.q-card.bulk-processing {
+  border-color: #f59e0b !important;
+  background: rgba(245, 158, 11, 0.15) !important;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}

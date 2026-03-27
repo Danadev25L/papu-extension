@@ -312,6 +312,85 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  // Handle CLICK_SAVE_AND_WAIT for bulk create
+  if (msg?.type === "CLICK_SAVE_AND_WAIT") {
+    (async () => {
+      try {
+        const tabId = msg.tabId;
+        if (!tabId) {
+          sendResponse({ ok: false, error: "No tab ID provided" });
+          return;
+        }
+
+        // Inject script to click save button and wait for navigation
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          func: () => {
+            return new Promise((resolve) => {
+              // Find and click the save button
+              const saveBtn = document.querySelector('button[type="submit"], input[type="submit"], .btn-primary:contains("Save"), .submit');
+              if (!saveBtn) {
+                resolve({ ok: false, error: "Save button not found" });
+                return;
+              }
+
+              // Store current URL
+              const originalUrl = window.location.href;
+
+              // Listen for navigation
+              const onUrlChange = () => {
+                if (window.location.href !== originalUrl && window.location.href.includes("/Courses/View/")) {
+                  window.removeEventListener("popstate", onUrlChange);
+                  resolve({ ok: true, newUrl: window.location.href });
+                }
+              };
+
+              // Listen for URL changes
+              window.addEventListener("popstate", onUrlChange);
+
+              // Also use MutationObserver to detect changes
+              const observer = new MutationObserver(() => {
+                if (window.location.href !== originalUrl && window.location.href.includes("/Courses/View/")) {
+                  observer.disconnect();
+                  window.removeEventListener("popstate", onUrlChange);
+                  resolve({ ok: true, newUrl: window.location.href });
+                }
+              });
+              observer.observe(document.body, { childList: true, subtree: true });
+
+              // Timeout after 10 seconds
+              const timeout = setTimeout(() => {
+                observer.disconnect();
+                window.removeEventListener("popstate", onUrlChange);
+                resolve({ ok: false, error: "Timeout waiting for save" });
+              }, 10000);
+
+              // Click the save button
+              saveBtn.click();
+
+              // Cleanup timeout on success
+              const originalResolve = resolve;
+              resolve = (value) => {
+                clearTimeout(timeout);
+                originalResolve(value);
+              };
+            });
+          }
+        });
+
+        const result = results?.[0]?.result;
+        if (result?.ok) {
+          sendResponse({ ok: true, newUrl: result.newUrl });
+        } else {
+          sendResponse({ ok: false, error: result?.error || "Failed to click save" });
+        }
+      } catch (e) {
+        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+    return true;
+  }
+
   if (msg?.type !== "FILL_ACTIVE_TAB") return;
 
   (async () => {

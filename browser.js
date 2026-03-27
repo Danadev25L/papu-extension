@@ -24,11 +24,15 @@ let state = {
   subjectId: "",
   examYear: "",
   examPeriod: "",
-  unitId: ""
+  unitId: "",
+  selectedQuestions: new Set() // Track selected question IDs for bulk create
 };
 
 // Track filled question temporarily (for green flash effect)
 let filledQuestionId = null;
+
+// Track bulk create state
+let bulkCreateInProgress = false;
 
 async function apiFetch(path) {
   const fullUrl = `${API_URL}${path.startsWith("/") ? path : "/" + path}`;
@@ -123,11 +127,16 @@ function renderQuestions() {
   items.forEach((q) => {
     const card = document.createElement("div");
     card.className = "q-card";
+    if (state.selectedQuestions.has(q.id)) {
+      card.classList.add("selected");
+    }
 
     const unitLabel = q.unitNameKu || (q.unitNumber ? `بەند ${q.unitNumber}` : "");
     const yearLabel = q.examYear || "";
+    const isSelected = state.selectedQuestions.has(q.id);
 
     card.innerHTML = `
+      <input type="checkbox" class="q-checkbox" data-id="${q.id}" ${isSelected ? "checked" : ""}>
       <div class="q-header">
         <span class="q-number">#${q.questionNumber}</span>
         <div class="q-meta">
@@ -143,7 +152,14 @@ function renderQuestions() {
       ` : ""}
     `;
 
-    // Click to fill (shows green temporarily, then back to normal)
+    // Checkbox click - toggle selection
+    const checkbox = card.querySelector(".q-checkbox");
+    checkbox.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleQuestionSelection(q.id, card);
+    });
+
+    // Card click - fill the form
     card.addEventListener("click", async () => {
       await fillActive({
         questionId: q.id,
@@ -155,6 +171,156 @@ function renderQuestions() {
 
     container.appendChild(card);
   });
+
+  // Add class for checkbox styling
+  document.querySelectorAll(".q-checkbox").forEach(cb => {
+    cb.closest(".q-card")?.classList.add("has-checkbox");
+  });
+}
+
+// Toggle question selection for bulk create
+function toggleQuestionSelection(questionId, cardElement) {
+  if (state.selectedQuestions.has(questionId)) {
+    state.selectedQuestions.delete(questionId);
+    cardElement?.classList.remove("selected");
+  } else {
+    state.selectedQuestions.add(questionId);
+    cardElement?.classList.add("selected");
+  }
+  updateBulkUI();
+}
+
+// Update bulk create button visibility and count
+function updateBulkUI() {
+  const bulkSection = document.getElementById("bulkSection");
+  const selectedCount = document.getElementById("selectedCount");
+
+  if (state.selectedQuestions.size > 0) {
+    bulkSection.style.display = "flex";
+    selectedCount.textContent = state.selectedQuestions.size;
+  } else {
+    bulkSection.style.display = "none";
+  }
+}
+
+// Clear all selections
+function clearSelections() {
+  state.selectedQuestions.clear();
+  document.querySelectorAll(".q-card.selected").forEach(card => {
+    card.classList.remove("selected");
+    const checkbox = card.querySelector(".q-checkbox");
+    if (checkbox) checkbox.checked = false;
+  });
+  updateBulkUI();
+}
+
+// Bulk create questions
+async function bulkCreate() {
+  if (state.selectedQuestions.size === 0 || bulkCreateInProgress) return;
+
+  bulkCreateInProgress = true;
+  const selectedIds = Array.from(state.selectedQuestions);
+  const selectedQuestions = state.questions.filter(q => state.selectedQuestions.has(q.id));
+
+  // Show progress
+  const bulkProgress = document.getElementById("bulkProgress");
+  const bulkSection = document.getElementById("bulkSection");
+  const progressText = document.getElementById("progressText");
+  const progressCount = document.getElementById("progressCount");
+  const progressFill = document.getElementById("progressFill");
+
+  bulkSection.style.display = "none";
+  bulkProgress.style.display = "block";
+
+  let successCount = 0;
+  let failCount = 0;
+
+  for (let i = 0; i < selectedQuestions.length; i++) {
+    const q = selectedQuestions[i];
+    const card = document.querySelector(`.q-checkbox[data-id="${q.id}"]`)?.closest(".q-card");
+
+    // Update progress
+    progressText.textContent = `دروستکردنی پرسیار ${i + 1} لە ${selectedQuestions.length}...`;
+    progressCount.textContent = `${i + 1}/${selectedQuestions.length}`;
+    progressFill.style.width = `${((i + 1) / selectedQuestions.length) * 100}%`;
+
+    // Mark card as processing
+    card?.classList.add("bulk-processing");
+
+    try {
+      // First fill the form
+      const fillResult = await fillActive({
+        questionId: q.id,
+        questionText: q.questionText,
+        options: q.options || [],
+        correctAnswer: q.correctAnswer || "",
+      }, null);
+
+      if (!fillResult.ok) {
+        failCount++;
+        card?.classList.remove("bulk-processing");
+        card?.classList.add("bulk-error");
+        continue;
+      }
+
+      // Wait a bit for form to fill
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Click the save button
+      const tabs = await chrome.tabs.query({});
+      const targetTab = tabs.find(t =>
+        t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
+      );
+
+      if (!targetTab) {
+        failCount++;
+        card?.classList.remove("bulk-processing");
+        continue;
+      }
+
+      // Click save button and wait for redirect
+      const saveResult = await chrome.runtime.sendMessage({
+        type: "CLICK_SAVE_AND_WAIT",
+        tabId: targetTab.id
+      });
+
+      if (saveResult?.ok) {
+        successCount++;
+        card?.classList.remove("bulk-processing");
+        card?.classList.add("bulk-done");
+
+        // Uncheck completed question
+        state.selectedQuestions.delete(q.id);
+        const checkbox = card?.querySelector(".q-checkbox");
+        if (checkbox) checkbox.checked = false;
+      } else {
+        failCount++;
+        card?.classList.remove("bulk-processing");
+      }
+
+      // Wait before next question (let page load)
+      await new Promise(resolve => setTimeout(resolve, 1500));
+
+    } catch (e) {
+      console.error("Bulk create error for question", q.id, e);
+      failCount++;
+      card?.classList.remove("bulk-processing");
+    }
+  }
+
+  // Hide progress, show result
+  bulkProgress.style.display = "none";
+  updateBulkUI();
+
+  if (successCount === selectedQuestions.length) {
+    showToast(`✅ تەواو بوو! ${successCount} پرسیار دروستکرا`, "success");
+  } else if (successCount > 0) {
+    showToast(`⚠️ ${successCount} سەرکەوتوو، ${failCount} سەرنەکەوتوو`, "success");
+  } else {
+    showToast(`❌ هەڵە! هیچ پرسیارێک نەدروستکرا`, "error");
+  }
+
+  bulkCreateInProgress = false;
 }
 
 async function loadSubjects() {
@@ -329,6 +495,12 @@ async function init() {
   });
 
   document.getElementById("searchInput").addEventListener("input", renderQuestions);
+
+  // Bulk create button
+  document.getElementById("bulkCreateBtn").addEventListener("click", bulkCreate);
+
+  // Clear selection button
+  document.getElementById("clearSelectionBtn").addEventListener("click", clearSelections);
 
   document.getElementById("refreshUnitsBtn").addEventListener("click", async () => {
     const btn = document.getElementById("refreshUnitsBtn");
