@@ -383,29 +383,6 @@ async function refreshQuestions() {
   }
 }
 
-let choicesInstances = {};
-
-function initChoices(id, placeholder = "هەڵبژێرە...") {
-  const element = document.getElementById(id);
-  if (!element) return;
-
-  // Destroy existing instance if any
-  if (choicesInstances[id]) {
-    choicesInstances[id].destroy();
-  }
-
-  // Create new Choices instance
-  choicesInstances[id] = new Choices(element, {
-    placeholder: placeholder,
-    searchEnabled: true,
-    shouldSort: false,
-    itemSelectText: true,
-    position: "bottom",
-    allowHTML: false,
-    resetScrollPosition: true,
-  });
-}
-
 async function init() {
   // Setup settings link
   const tabs = await chrome.tabs.query({});

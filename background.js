@@ -327,9 +327,45 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           target: { tabId: tabId },
           func: () => {
             return new Promise((resolve) => {
-              // Find and click the save button
-              const saveBtn = document.querySelector('button[type="submit"], input[type="submit"], .btn-primary:contains("Save"), .submit');
+              // Try multiple selectors to find the save button
+              let saveBtn = null;
+
+              // Try common selectors
+              const selectors = [
+                'button[type="submit"]',
+                'input[type="submit"]',
+                'button.submit',
+                'button.btn-primary',
+                'button.btn.btn-primary',
+                'button[class*="submit"]',
+                'button[class*="Save"]',
+                'input[value*="Save"]',
+                'input[value*="خەزن"]',
+                'input[value*="حەزن"]',
+              ];
+
+              for (const selector of selectors) {
+                const btn = document.querySelector(selector);
+                if (btn) {
+                  saveBtn = btn;
+                  console.log("[Papu] Found save button:", selector);
+                  break;
+                }
+              }
+
+              // Try to find button by text content
               if (!saveBtn) {
+                const buttons = Array.from(document.querySelectorAll('button'));
+                saveBtn = buttons.find(btn =>
+                  btn.textContent?.includes('Save') ||
+                  btn.textContent?.includes('خەزن') ||
+                  btn.textContent?.includes('حەزن')
+                );
+                if (saveBtn) console.log("[Papu] Found save button by text");
+              }
+
+              if (!saveBtn) {
+                console.error("[Papu] No save button found. Tried selectors:", selectors);
                 resolve({ ok: false, error: "Save button not found" });
                 return;
               }
@@ -337,43 +373,65 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               // Store current URL
               const originalUrl = window.location.href;
 
-              // Listen for navigation
-              const onUrlChange = () => {
+              // Listen for URL changes
+              const checkUrl = () => {
                 if (window.location.href !== originalUrl && window.location.href.includes("/Courses/View/")) {
-                  window.removeEventListener("popstate", onUrlChange);
+                  return true;
+                }
+                return false;
+              };
+
+              // Use multiple methods to detect navigation
+              let resolved = false;
+
+              // Method 1: popstate event
+              const onPopState = () => {
+                if (!resolved && checkUrl()) {
+                  resolved = true;
+                  window.removeEventListener("popstate", onPopState);
                   resolve({ ok: true, newUrl: window.location.href });
                 }
               };
+              window.addEventListener("popstate", onPopState);
 
-              // Listen for URL changes
-              window.addEventListener("popstate", onUrlChange);
-
-              // Also use MutationObserver to detect changes
+              // Method 2: MutationObserver for URL changes
               const observer = new MutationObserver(() => {
-                if (window.location.href !== originalUrl && window.location.href.includes("/Courses/View/")) {
+                if (!resolved && checkUrl()) {
+                  resolved = true;
                   observer.disconnect();
-                  window.removeEventListener("popstate", onUrlChange);
+                  window.removeEventListener("popstate", onPopState);
                   resolve({ ok: true, newUrl: window.location.href });
                 }
               });
-              observer.observe(document.body, { childList: true, subtree: true });
+              observer.observe(document.documentElement, { childList: true, subtree: true });
 
-              // Timeout after 10 seconds
+              // Method 3: Poll URL as fallback
+              const urlCheckInterval = setInterval(() => {
+                if (!resolved && checkUrl()) {
+                  resolved = true;
+                  clearInterval(urlCheckInterval);
+                  observer.disconnect();
+                  window.removeEventListener("popstate", onPopState);
+                  resolve({ ok: true, newUrl: window.location.href });
+                }
+              }, 100);
+
+              // Timeout after 15 seconds
               const timeout = setTimeout(() => {
-                observer.disconnect();
-                window.removeEventListener("popstate", onUrlChange);
-                resolve({ ok: false, error: "Timeout waiting for save" });
-              }, 10000);
+                if (!resolved) {
+                  resolved = true;
+                  clearInterval(urlCheckInterval);
+                  observer.disconnect();
+                  window.removeEventListener("popstate", onPopState);
+                  console.error("[Papu] Timeout waiting for save. Current URL:", window.location.href);
+                  resolve({ ok: false, error: "Timeout waiting for save", currentUrl: window.location.href });
+                }
+              }, 15000);
 
               // Click the save button
+              console.log("[Papu] Clicking save button...");
               saveBtn.click();
-
-              // Cleanup timeout on success
-              const originalResolve = resolve;
-              resolve = (value) => {
-                clearTimeout(timeout);
-                originalResolve(value);
-              };
+              saveBtn.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
             });
           }
         });
