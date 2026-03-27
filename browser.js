@@ -206,7 +206,11 @@ function renderQuestions() {
 
             // Also check choiceImages from extension state
             const hasImageFromState = q.choiceImages?.[i];
-            const displayImageUrl = optImageUrl || hasImageFromState;
+            // Convert relative URLs to absolute backend URLs
+            const backendUrl = "https://pepumangment-backend.danabestun.dev";
+            const displayImageUrl = optImageUrl || (hasImageFromState && hasImageFromState.startsWith('/')
+              ? backendUrl + hasImageFromState
+              : hasImageFromState);
 
             const defaultLabel = (i === 0 ? 'A' : i === 1 ? 'B' : i === 2 ? 'C' : 'D');
             const truncatedText = escapeHtml(String(optText).slice(0, 40)) + (String(optText).length > 40 ? "..." : "");
