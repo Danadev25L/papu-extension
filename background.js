@@ -115,7 +115,7 @@ async function papuInjectedFill(payload, mapping) {
     found.options.push(setNativeValue(el, cleanText));
   });
 
-  // Handle choice images - directly set content for image URLs
+  // Handle choice images - fetch image and simulate drop/paste event
   console.log('[Fill] choiceImages payload:', payload.choiceImages, 'keys:', Object.keys(payload.choiceImages || {}));
   if (payload.choiceImages && typeof payload.choiceImages === 'object' && Object.keys(payload.choiceImages).length > 0) {
     for (const [idx, imageUrl] of Object.entries(payload.choiceImages)) {
@@ -128,46 +128,40 @@ async function papuInjectedFill(payload, mapping) {
       }
 
       try {
-        // Convert relative URLs to absolute - use backend URL, not current page origin
+        // Convert relative URLs to absolute - use backend URL
         let absoluteUrl = imageUrl;
         if (imageUrl.startsWith('/uploads/')) {
           absoluteUrl = 'https://pepumangment-backend.danabestun.dev' + imageUrl;
         }
 
-        // Use markdown format for image: ![Image](url)
-        const markdownValue = `![Image](${absoluteUrl})`;
-        console.log(`[Fill] Choice ${i} image markdown:`, markdownValue);
+        console.log(`[Fill] Choice ${i} - fetching image from:`, absoluteUrl);
 
-        // Try to access Alpine.js component and set content directly
-        // x-model="choice.content" means the data structure is { choice: { content: value } }
-        if (targetTextarea._x_dataStack && targetTextarea._x_dataStack[0]) {
-          const stack = targetTextarea._x_dataStack;
-          for (let j = 0; j < stack.length; j++) {
-            const data = stack[j];
-            if (data.choice && data.choice.content !== undefined) {
-              data.choice.content = markdownValue;
-              console.log(`[Fill] Set Alpine choice.content for choice ${i}:`, markdownValue);
-              await new Promise(r => setTimeout(r, 100)); // Wait for Alpine to react
-              continue;
-            }
-          }
+        // Fetch the image and convert to blob
+        const imageResponse = await fetch(absoluteUrl);
+        if (!imageResponse.ok) {
+          console.log(`[Fill] Failed to fetch image:`, imageResponse.status);
+          continue;
         }
+        const blob = await imageResponse.blob();
+        const file = new File([blob], `choice_${i}.jpg`, { type: 'image/jpeg' });
 
-        // Fallback: Try Alpine API
-        if (window.Alpine) {
-          const alpineData = window.Alpine.$data(targetTextarea);
-          if (alpineData && alpineData.choice && alpineData.choice.content !== undefined) {
-            alpineData.choice.content = markdownValue;
-            console.log(`[Fill] Set Alpine choice.content via API for choice ${i}:`, markdownValue);
-            await new Promise(r => setTimeout(r, 100));
-            continue;
-          }
-        }
+        // Create a DataTransfer object with the file (simulates drag & drop or paste)
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(file);
 
-        // Last resort: Set value directly
-        targetTextarea.value = markdownValue;
-        targetTextarea.dispatchEvent(new Event('input', { bubbles: true }));
-        console.log(`[Fill] Set value directly for choice ${i}:`, markdownValue);
+        // Create and dispatch drop event
+        const dropEvent = new DragEvent('drop', {
+          bubbles: true,
+          cancelable: true,
+          dataTransfer: dataTransfer
+        });
+
+        targetTextarea.dispatchEvent(dropEvent);
+        console.log(`[Fill] Choice ${i} - dispatched drop event with image file`);
+
+        // Wait for the upload to process
+        await new Promise(r => setTimeout(r, 1500));
+
       } catch (err) {
         console.error(`[Fill] Failed to set choice ${i} image:`, err);
       }
