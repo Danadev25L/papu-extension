@@ -597,6 +597,15 @@ async function refreshQuestions() {
 }
 
 async function init() {
+  // Debug log - confirm init is running
+  console.log('[INIT] Extension initializing at', new Date().toISOString());
+
+  // Visual indicator - update count label to confirm
+  const countLabel = document.getElementById("countLabel");
+  if (countLabel) {
+    countLabel.textContent = countLabel.textContent + " ✅";
+  }
+
   // Setup settings link
   const tabs = await chrome.tabs.query({});
   const adminTab = tabs.find(t => t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd")));
