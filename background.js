@@ -45,10 +45,21 @@ function papuInjectedFill(payload, mapping) {
     return false;
   }
 
+  function stripQuestionNumber(s) {
+    if (!s || typeof s !== "string") return s;
+    return s
+      // Remove Arabic/Persian/Kurdish numerals at start (٠١٢٣٤٥٦٧٨٩)
+      .replace(/^[٠-٩ٔ]+[\.\.\s\s]*/, "")
+      // Remove English numerals at start (0-9)
+      .replace(/^[0-9]+[\.\.\s\s]*/, "")
+      .trim();
+  }
+
   const qSel = mapping.questionSelector;
   if (qSel && payload.questionText) {
     const el = findEl(qSel);
-    found.question = setNativeValue(el, payload.questionText);
+    const cleanQuestionText = stripQuestionNumber(payload.questionText);
+    found.question = setNativeValue(el, cleanQuestionText);
   }
 
   function stripOptionLabel(s) {
