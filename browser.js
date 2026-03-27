@@ -166,6 +166,7 @@ function renderQuestions() {
         questionText: q.questionText,
         options: q.options || [],
         correctAnswer: q.correctAnswer || "",
+        unitId: state.unitId || undefined  // Include selected unit
       }, card);
     });
 
@@ -269,7 +270,24 @@ async function bulkCreate() {
       console.log("[Bulk Create] Question text:", q.questionText?.slice(0, 50));
       console.log("[Bulk Create] Options:", q.options);
 
-      // First fill the form using background script
+      // FIRST: Set the unit dropdown (if a unit is selected)
+      if (state.unitId) {
+        await chrome.scripting.executeScript({
+          target: { tabId: targetTab.id },
+          func: (unitId) => {
+            const unitSelect = document.querySelector('select[name="Question.UnitId"], select[name="UnitId"], #UnitId');
+            if (unitSelect) {
+              unitSelect.value = unitId;
+              unitSelect.dispatchEvent(new Event("change", { bubbles: true }));
+              console.log("[Bulk Create] Set unit to:", unitId);
+            }
+          },
+          args: [state.unitId]
+        });
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+
+      // THEN: Fill the form using background script
       const fillResult = await chrome.runtime.sendMessage({
         type: "FILL_SPECIFIC_TAB",
         tabId: targetTab.id,
@@ -278,6 +296,7 @@ async function bulkCreate() {
           questionText: q.questionText,
           options: q.options || [],
           correctAnswer: q.correctAnswer || "",
+          unitId: state.unitId || undefined  // Include selected unit
         }
       });
 

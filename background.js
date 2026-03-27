@@ -62,6 +62,15 @@ function papuInjectedFill(payload, mapping) {
     found.question = setNativeValue(el, cleanQuestionText);
   }
 
+  // Set unit if provided in payload
+  if (payload.unitId) {
+    const unitSelect = document.querySelector('select[name="Question.UnitId"], select[name="UnitId"], #UnitId');
+    if (unitSelect) {
+      setNativeValue(unitSelect, payload.unitId);
+      console.log("[Fill] Set unit to:", payload.unitId);
+    }
+  }
+
   function stripOptionLabel(s) {
     if (!s || typeof s !== "string") return s;
     return s
