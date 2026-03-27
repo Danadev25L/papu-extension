@@ -25,7 +25,9 @@ let state = {
   examYear: "",
   examPeriod: "",
   unitId: "",
-  selectedQuestions: new Set() // Track selected question IDs for bulk create
+  selectedQuestions: new Set(), // Track selected question IDs for bulk create
+  questionImages: [], // Store uploaded question image URLs
+  choiceImages: {} // Store uploaded choice image URLs: {0: url, 1: url, ...}
 };
 
 // Track filled question temporarily (for green flash effect)
@@ -40,6 +42,35 @@ async function apiFetch(path) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
+}
+
+/**
+ * Upload an image file to the server and return the URL
+ */
+async function uploadImage(file) {
+  const reader = new FileReader();
+  return new Promise((resolve, reject) => {
+    reader.onload = async () => {
+      const base64 = reader.result;
+      try {
+        const res = await fetch(`${API_URL}/upload`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file: base64 }),
+        });
+        const data = await res.json();
+        if (data.url) {
+          resolve(data.url);
+        } else {
+          reject(new Error(data.error || "Upload failed"));
+        }
+      } catch (e) {
+        reject(e);
+      }
+    };
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
 }
 
 function fillSelect(sel, options) {
@@ -80,10 +111,17 @@ async function fillActive(payload, cardElement) {
       return { ok: false, error: "Tab not found" };
     }
 
+    // Include current state's question images and choice images
+    const enrichedPayload = {
+      ...payload,
+      questionImages: state.questionImages,
+      choiceImages: state.choiceImages
+    };
+
     const res = await chrome.runtime.sendMessage({
       type: "FILL_SPECIFIC_TAB",
       tabId: targetTab.id,
-      payload
+      payload: enrichedPayload
     });
 
     if (res?.ok) {
@@ -125,6 +163,9 @@ function renderQuestions() {
   }
 
   items.forEach((q) => {
+    // Debug: log choice images from backend
+    console.log('[Browser] Question', q.id, 'choiceImages:', q.choiceImages, 'keys:', Object.keys(q.choiceImages || {}));
+
     const card = document.createElement("div");
     card.className = "q-card";
     if (state.selectedQuestions.has(q.id)) {
@@ -134,6 +175,8 @@ function renderQuestions() {
     const unitLabel = q.unitNameKu || (q.unitNumber ? `بەند ${q.unitNumber}` : "");
     const yearLabel = q.examYear || "";
     const isSelected = state.selectedQuestions.has(q.id);
+    const hasQuestionImages = (q.questionImages?.length ?? 0) > 0;
+    const hasChoiceImages = Object.keys(q.choiceImages ?? {}).length > 0;
 
     card.innerHTML = `
       <input type="checkbox" class="q-checkbox" data-id="${q.id}" ${isSelected ? "checked" : ""}>
@@ -142,12 +185,41 @@ function renderQuestions() {
         <div class="q-meta">
           ${unitLabel ? `<span class="q-unit">${escapeHtml(unitLabel)}</span>` : ""}
           ${yearLabel ? `<span class="q-year">${yearLabel}</span>` : ""}
+          ${hasQuestionImages ? `<span class="q-images">🖼️ ${q.questionImages?.length || 0}</span>` : ""}
+          ${hasChoiceImages ? `<span class="q-images">🖼️ ${Object.keys(q.choiceImages || {}).length}</span>` : ""}
         </div>
       </div>
       <p class="q-text">${escapeHtml((q.questionText || "").slice(0, 200))}${(q.questionText || "").length > 200 ? "..." : ""}</p>
       ${(q.options || []).length > 0 ? `
         <div class="q-options">
-          ${(q.options || []).slice(0, 4).map(opt => `<span class="q-opt">${escapeHtml(opt).slice(0, 40)}${opt.length > 40 ? "..." : ""}</span>`).join("")}
+          ${(q.options || []).slice(0, 4).map((opt, i) => {
+            // Handle both string options and object options with imageUrl
+            let optText = "";
+            let optImageUrl = undefined;
+
+            if (typeof opt === "string") {
+              optText = opt;
+            } else if (typeof opt === "object" && opt !== null) {
+              optText = opt.text || opt.label || "";
+              optImageUrl = opt.imageUrl;
+            }
+
+            // Also check choiceImages from extension state
+            const hasImageFromState = q.choiceImages?.[i];
+            const displayImageUrl = optImageUrl || hasImageFromState;
+
+            const defaultLabel = (i === 0 ? 'A' : i === 1 ? 'B' : i === 2 ? 'C' : 'D');
+            const truncatedText = escapeHtml(String(optText).slice(0, 40)) + (String(optText).length > 40 ? "..." : "");
+            const hasText = optText && optText.trim().length > 0;
+
+            if (displayImageUrl) {
+              const labelText = hasText ? truncatedText : defaultLabel;
+              return `<span class="q-opt q-opt-with-image"><img src="${escapeHtml(displayImageUrl)}" class="q-opt-image" alt="option ${i + 1}" loading="lazy"><span class="q-opt-text">${labelText}</span></span>`;
+            }
+            // Text-only option - show text or fallback label
+            const displayText = hasText ? truncatedText : defaultLabel;
+            return `<span class="q-opt">${displayText}</span>`;
+          }).join("")}
         </div>
       ` : ""}
     `;
@@ -166,7 +238,8 @@ function renderQuestions() {
         questionText: q.questionText,
         options: q.options || [],
         correctAnswer: q.correctAnswer || "",
-        unitId: state.unitId || undefined  // Include selected unit
+        unitId: state.unitId || undefined,  // Include selected unit
+        choiceImages: q.choiceImages  // Include choice images
       }, card);
     });
 
@@ -296,7 +369,8 @@ async function bulkCreate() {
           questionText: q.questionText,
           options: q.options || [],
           correctAnswer: q.correctAnswer || "",
-          unitId: state.unitId || undefined  // Include selected unit
+          unitId: state.unitId || undefined,  // Include selected unit
+          choiceImages: q.choiceImages  // Include choice images
         }
       });
 

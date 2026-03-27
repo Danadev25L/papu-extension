@@ -7,8 +7,14 @@ chrome.action.onClicked.addListener(async (tab) => {
 /**
  * Injected into the active tab. Fills form and returns diagnostic.
  * Must be self-contained — no external refs (findEl inlined).
+ *
+ * Supports:
+ * - questionText, options, correctAnswer (existing fields)
+ * - questionImages: Array of image URLs for the question
+ * - choiceImages: {0: url, 1: url, ...} mapping choice index to image URL
+ * - unitId: Unit selection
  */
-function papuInjectedFill(payload, mapping) {
+async function papuInjectedFill(payload, mapping) {
   function findEl(selStr) {
     if (!selStr || typeof selStr !== "string") return null;
     const parts = String(selStr).split(",").map((s) => s.trim()).filter(Boolean);
@@ -60,6 +66,27 @@ function papuInjectedFill(payload, mapping) {
     const el = findEl(qSel);
     const cleanQuestionText = stripQuestionNumber(payload.questionText);
     found.question = setNativeValue(el, cleanQuestionText);
+
+    // Also fill question image inputs if available
+    if (payload.questionImages && Array.isArray(payload.questionImages)) {
+      payload.questionImages.forEach((imageUrl, idx) => {
+        const imageInputSelectors = [
+          `input[name="Question.Image"]`,
+          `input[name="Question.Images[${idx}]"]`,
+          `input[name*="question"][name*="image"][type="text"]`,
+          `input[name*="Question"][name*="Image"][type="text"]`,
+          `#question-image`,
+        ];
+        for (const sel of imageInputSelectors) {
+          const imgInput = document.querySelector(sel);
+          if (imgInput && (imgInput.type === 'text' || imgInput.type === 'url')) {
+            setNativeValue(imgInput, imageUrl);
+            console.log(`[Fill] Set question image ${idx}:`, imageUrl);
+            break;
+          }
+        }
+      });
+    }
   }
 
   // Set unit if provided in payload
@@ -87,6 +114,63 @@ function papuInjectedFill(payload, mapping) {
     const el = choiceTextareas[i];
     found.options.push(setNativeValue(el, cleanText));
   });
+
+  // Handle choice images - directly set content for image URLs
+  console.log('[Fill] choiceImages payload:', payload.choiceImages, 'keys:', Object.keys(payload.choiceImages || {}));
+  if (payload.choiceImages && typeof payload.choiceImages === 'object' && Object.keys(payload.choiceImages).length > 0) {
+    for (const [idx, imageUrl] of Object.entries(payload.choiceImages)) {
+      const i = parseInt(idx, 10);
+      const targetTextarea = choiceTextareas[i];
+
+      if (!targetTextarea) {
+        console.log(`[Fill] No textarea found for choice ${i}`);
+        continue;
+      }
+
+      try {
+        // Convert relative URLs to absolute
+        let absoluteUrl = imageUrl;
+        if (imageUrl.startsWith('/uploads/')) {
+          absoluteUrl = window.location.origin + imageUrl;
+        }
+
+        console.log(`[Fill] Choice ${i} image URL:`, absoluteUrl);
+
+        // Try to access Alpine.js component and set content directly
+        // x-model="choice.content" means the data structure is { choice: { content: value } }
+        if (targetTextarea._x_dataStack && targetTextarea._x_dataStack[0]) {
+          const stack = targetTextarea._x_dataStack;
+          for (let j = 0; j < stack.length; j++) {
+            const data = stack[j];
+            if (data.choice && data.choice.content !== undefined) {
+              data.choice.content = absoluteUrl;
+              console.log(`[Fill] Set Alpine choice.content for choice ${i}:`, absoluteUrl);
+              await new Promise(r => setTimeout(r, 100)); // Wait for Alpine to react
+              continue;
+            }
+          }
+        }
+
+        // Fallback: Try Alpine API
+        if (window.Alpine) {
+          const alpineData = window.Alpine.$data(targetTextarea);
+          if (alpineData && alpineData.choice && alpineData.choice.content !== undefined) {
+            alpineData.choice.content = absoluteUrl;
+            console.log(`[Fill] Set Alpine choice.content via API for choice ${i}:`, absoluteUrl);
+            await new Promise(r => setTimeout(r, 100));
+            continue;
+          }
+        }
+
+        // Last resort: Set value directly
+        targetTextarea.value = absoluteUrl;
+        targetTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+        console.log(`[Fill] Set value directly for choice ${i}:`, absoluteUrl);
+      } catch (err) {
+        console.error(`[Fill] Failed to set choice ${i} image:`, err);
+      }
+    }
+  }
 
   const checkboxSels = mapping.correctAnswerCheckboxSelectors;
   const fallbackCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"][name*="IsCorrect"]'));
@@ -135,6 +219,33 @@ function papuInjectedFill(payload, mapping) {
       found.correct = setNativeValue(el, payload.correctAnswer);
     }
   }
+
+  // Store image data for the admin panel to use
+  // The admin form can read these data attributes to populate image fields
+  const form = document.querySelector('form');
+  if (form) {
+    // Store question images as JSON
+    if (payload.questionImages && Array.isArray(payload.questionImages)) {
+      form.dataset.questionImages = JSON.stringify(payload.questionImages);
+      console.log("[Fill] Set question images:", payload.questionImages);
+    }
+
+    // Store choice images as JSON
+    if (payload.choiceImages && typeof payload.choiceImages === 'object') {
+      form.dataset.choiceImages = JSON.stringify(payload.choiceImages);
+      console.log("[Fill] Set choice images:", payload.choiceImages);
+    }
+
+    // Dispatch custom event for admin panel to listen for
+    form.dispatchEvent(new CustomEvent('papu-images-ready', {
+      detail: {
+        questionImages: payload.questionImages || [],
+        choiceImages: payload.choiceImages || {}
+      },
+      bubbles: true
+    }));
+  }
+
   return found;
 }
 
