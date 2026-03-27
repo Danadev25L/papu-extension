@@ -1,6 +1,7 @@
 /** Papu extension — fetches questions from API, fills admin.pepu.krd on click */
 
-const API_URL = "https://pepumangment-backend.danabestun.dev/api";
+const PROD_API_URL = "https://pepumangment-backend.danabestun.dev/api";
+const LOCAL_API_URL = "http://localhost:3001/api";
 const ALL = "__all__";
 
 function getExamYears() {
@@ -22,11 +23,37 @@ let state = { subjects: [], questions: [], subjectId: "", examYear: "", examPeri
 let selectedIndex = -1;
 
 async function apiFetch(path) {
-  const fullUrl = `${API_URL}${path.startsWith("/") ? path : "/" + path}`;
-  const res = await fetch(fullUrl, { credentials: "omit" });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
+  // Try production first, fallback to localhost on error
+  const urls = [PROD_API_URL, LOCAL_API_URL];
+
+  for (const baseUrl of urls) {
+    try {
+      const fullUrl = `${baseUrl}${path.startsWith("/") ? path : "/" + path}`;
+      const res = await fetch(fullUrl, { credentials: "omit", signal: AbortSignal.timeout(5000) });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        // If it's a 404 or other client error, don't retry - throw immediately
+        if (res.status >= 400 && res.status < 500) throw new Error(data.error || `HTTP ${res.status}`);
+        // For server errors, try next URL
+        continue;
+      }
+
+      const data = await res.json();
+      console.log(`[API Popup] Using: ${baseUrl === PROD_API_URL ? "PROD" : "LOCAL"}`);
+      return data;
+    } catch (e) {
+      // If fetch fails completely (network error), try next URL
+      if (baseUrl === urls[urls.length - 1]) {
+        // Last URL failed, throw error
+        throw e;
+      }
+      // Try next URL
+      continue;
+    }
+  }
+
+  throw new Error("All API endpoints failed");
 }
 
 async function getActiveHostname() {

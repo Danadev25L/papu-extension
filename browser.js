@@ -1,6 +1,7 @@
 /** Papu extension — Full question browser tab */
 
-const API_URL = "https://pepumangment-backend.danabestun.dev/api";
+const PROD_API_URL = "https://pepumangment-backend.danabestun.dev/api";
+const LOCAL_API_URL = "http://localhost:3001/api";
 const ALL = "__all__";
 
 function getExamYears() {
@@ -37,35 +38,73 @@ let filledQuestionId = null;
 let bulkCreateInProgress = false;
 
 async function apiFetch(path) {
-  const fullUrl = `${API_URL}${path.startsWith("/") ? path : "/" + path}`;
-  const res = await fetch(fullUrl, { credentials: "omit" });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
+  // Try production first, fallback to localhost on error
+  const urls = [PROD_API_URL, LOCAL_API_URL];
+
+  for (const baseUrl of urls) {
+    try {
+      const fullUrl = `${baseUrl}${path.startsWith("/") ? path : "/" + path}`;
+      const res = await fetch(fullUrl, { credentials: "omit", signal: AbortSignal.timeout(5000) });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        // If it's a 404 or other client error, don't retry - throw immediately
+        if (res.status >= 400 && res.status < 500) throw new Error(data.error || `HTTP ${res.status}`);
+        // For server errors, try next URL
+        continue;
+      }
+
+      const data = await res.json();
+      // Log which server we're using
+      console.log(`[API] Using: ${baseUrl === PROD_API_URL ? "PROD" : "LOCAL"}`);
+      return data;
+    } catch (e) {
+      // If fetch fails completely (network error), try next URL
+      if (baseUrl === urls[urls.length - 1]) {
+        // Last URL failed, throw error
+        throw e;
+      }
+      // Try next URL
+      continue;
+    }
+  }
+
+  throw new Error("All API endpoints failed");
 }
 
 /**
  * Upload an image file to the server and return the URL
+ * Uses fallback logic: prod -> local
  */
 async function uploadImage(file) {
   const reader = new FileReader();
   return new Promise((resolve, reject) => {
     reader.onload = async () => {
       const base64 = reader.result;
-      try {
-        const res = await fetch(`${API_URL}/upload`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ file: base64 }),
-        });
-        const data = await res.json();
-        if (data.url) {
-          resolve(data.url);
-        } else {
-          reject(new Error(data.error || "Upload failed"));
+      const urls = [PROD_API_URL, LOCAL_API_URL];
+
+      for (const baseUrl of urls) {
+        try {
+          const res = await fetch(`${baseUrl}/upload`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ file: base64 }),
+            signal: AbortSignal.timeout(30000),
+          });
+
+          const data = await res.json();
+          if (data.url) {
+            console.log(`[Upload] Using: ${baseUrl === PROD_API_URL ? "PROD" : "LOCAL"}`);
+            resolve(data.url);
+            return;
+          }
+        } catch (e) {
+          // Try next URL
+          if (baseUrl === urls[urls.length - 1]) {
+            reject(e);
+            return;
+          }
         }
-      } catch (e) {
-        reject(e);
       }
     };
     reader.onerror = () => reject(new Error("Failed to read file"));
