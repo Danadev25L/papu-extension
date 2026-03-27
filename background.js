@@ -128,13 +128,15 @@ async function papuInjectedFill(payload, mapping) {
       }
 
       try {
-        // Convert relative URLs to absolute
+        // Convert relative URLs to absolute - use backend URL, not current page origin
         let absoluteUrl = imageUrl;
         if (imageUrl.startsWith('/uploads/')) {
-          absoluteUrl = window.location.origin + imageUrl;
+          absoluteUrl = 'https://pepumangment-backend.danabestun.dev' + imageUrl;
         }
 
-        console.log(`[Fill] Choice ${i} image URL:`, absoluteUrl);
+        // Use markdown format for image: ![Image](url)
+        const markdownValue = `![Image](${absoluteUrl})`;
+        console.log(`[Fill] Choice ${i} image markdown:`, markdownValue);
 
         // Try to access Alpine.js component and set content directly
         // x-model="choice.content" means the data structure is { choice: { content: value } }
@@ -143,8 +145,8 @@ async function papuInjectedFill(payload, mapping) {
           for (let j = 0; j < stack.length; j++) {
             const data = stack[j];
             if (data.choice && data.choice.content !== undefined) {
-              data.choice.content = absoluteUrl;
-              console.log(`[Fill] Set Alpine choice.content for choice ${i}:`, absoluteUrl);
+              data.choice.content = markdownValue;
+              console.log(`[Fill] Set Alpine choice.content for choice ${i}:`, markdownValue);
               await new Promise(r => setTimeout(r, 100)); // Wait for Alpine to react
               continue;
             }
@@ -155,17 +157,17 @@ async function papuInjectedFill(payload, mapping) {
         if (window.Alpine) {
           const alpineData = window.Alpine.$data(targetTextarea);
           if (alpineData && alpineData.choice && alpineData.choice.content !== undefined) {
-            alpineData.choice.content = absoluteUrl;
-            console.log(`[Fill] Set Alpine choice.content via API for choice ${i}:`, absoluteUrl);
+            alpineData.choice.content = markdownValue;
+            console.log(`[Fill] Set Alpine choice.content via API for choice ${i}:`, markdownValue);
             await new Promise(r => setTimeout(r, 100));
             continue;
           }
         }
 
         // Last resort: Set value directly
-        targetTextarea.value = absoluteUrl;
+        targetTextarea.value = markdownValue;
         targetTextarea.dispatchEvent(new Event('input', { bubbles: true }));
-        console.log(`[Fill] Set value directly for choice ${i}:`, absoluteUrl);
+        console.log(`[Fill] Set value directly for choice ${i}:`, markdownValue);
       } catch (err) {
         console.error(`[Fill] Failed to set choice ${i} image:`, err);
       }
