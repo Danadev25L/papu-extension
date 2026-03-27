@@ -112,10 +112,15 @@ async function fillActive(payload, cardElement) {
     }
 
     // Include current state's question images and choice images
+    // Use payload.choiceImages (from question) first, fallback to state (user uploaded)
     const enrichedPayload = {
       ...payload,
-      questionImages: state.questionImages,
-      choiceImages: state.choiceImages
+      questionImages: (payload.questionImages?.length ?? 0) > 0
+        ? payload.questionImages
+        : state.questionImages,
+      choiceImages: (payload.choiceImages && Object.keys(payload.choiceImages).length > 0)
+        ? payload.choiceImages
+        : state.choiceImages
     };
 
     const res = await chrome.runtime.sendMessage({
@@ -168,6 +173,13 @@ function renderQuestions() {
 
     const card = document.createElement("div");
     card.className = "q-card";
+    if (state.selectedQuestions.has(q.id)) {
+      card.classList.add("selected");
+    }
+
+    // DEBUG: Add choiceImages info to unit label
+    const imageCount = Object.keys(q.choiceImages || {}).length;
+    const debugLabel = imageCount > 0 ? ` 🖼️${imageCount}` : '';
     if (state.selectedQuestions.has(q.id)) {
       card.classList.add("selected");
     }
@@ -237,7 +249,13 @@ function renderQuestions() {
 
     // Card click - fill the form
     card.addEventListener("click", async () => {
+      // DEBUG: Show visual indicator that click was received
+      card.style.border = "3px solid red";
+      setTimeout(() => card.style.border = "", 500);
+
       console.log('[Click] Question', q.id, 'choiceImages:', q.choiceImages, 'keys:', Object.keys(q.choiceImages || {}));
+      console.log('[Click] Full question data:', JSON.stringify({id: q.id, choiceImages: q.choiceImages}));
+
       await fillActive({
         questionId: q.id,
         questionText: q.questionText,

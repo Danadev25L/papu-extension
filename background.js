@@ -320,6 +320,12 @@ function papuDebugFields() {
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // Debug: Log all incoming messages
+  if (msg?.type === "FILL_SPECIFIC_TAB") {
+    console.log('[Background] FILL_SPECIFIC_TAB received, payload keys:', Object.keys(msg.payload || {}));
+    console.log('[Background] payload.choiceImages:', msg.payload?.choiceImages);
+  }
+
   if (msg?.type === "DEBUG_FIELDS") {
     (async () => {
       try {
