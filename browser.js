@@ -237,6 +237,7 @@ function renderQuestions() {
 
     // Card click - fill the form
     card.addEventListener("click", async () => {
+      console.log('[Click] Question', q.id, 'choiceImages:', q.choiceImages, 'keys:', Object.keys(q.choiceImages || {}));
       await fillActive({
         questionId: q.id,
         questionText: q.questionText,
