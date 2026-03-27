@@ -299,34 +299,57 @@ async function bulkCreate() {
 
       // Click the save button using injected script - try multiple methods
       console.log("[Bulk Create] Attempting to submit form...");
+
+      // First, let's check what's in the form before submitting
+      const formCheck = await chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        func: () => {
+          const form = document.querySelector('form');
+          if (!form) return { error: "No form found" };
+
+          // Get form action and method
+          const action = form.action;
+          const method = form.method;
+
+          // Get some field values to verify they're filled
+          const questionText = document.querySelector('textarea[name*="question"], textarea[name*="Question"]')?.value?.slice(0, 50) || "empty";
+          const options = Array.from(document.querySelectorAll('textarea[name*="Choice"], textarea[name*="choice"]'))
+            .map(t => t.value?.slice(0, 30) || "empty");
+
+          return {
+            action,
+            method,
+            questionText,
+            options,
+            formAction: action,
+            hasCsrf: !!document.querySelector('input[name*="csrf"], input[name*="token"], meta[name="csrf-token"]')
+          };
+        }
+      });
+
+      console.log("[Bulk Create] Form check BEFORE submit:", formCheck);
+
       const saveClicked = await chrome.scripting.executeScript({
         target: { tabId: targetTab.id },
         func: () => {
-          // Method 1: Find the form and submit it directly
-          const form = document.querySelector('form[action*="/Questions"]');
-          if (form) {
-            console.log("[Submit] Found form, submitting...");
-            form.submit();
-            return { ok: true, method: "form.submit" };
+          // Find the specific save button with formaction="/Courses/Questions/Edit/0"
+          const saveBtn = document.querySelector('button[formaction="/Courses/Questions/Edit/0"], button[formaction*="/Questions/Edit"]');
+          if (saveBtn) {
+            console.log("[Submit] Found save button with formaction:", saveBtn.getAttribute('formaction'));
+            saveBtn.click();
+            return { ok: true, method: "save-button.click" };
           }
 
-          // Method 2: Click submit button
-          const submitBtn = document.querySelector('button[type="submit"], input[type="submit"]');
-          if (submitBtn) {
-            console.log("[Submit] Clicking submit button...");
-            submitBtn.click();
-            return { ok: true, method: "button.click" };
+          // Fallback: Find button with text "پاشەکەوت"
+          const allButtons = Array.from(document.querySelectorAll('button'));
+          const textBtn = allButtons.find(b => b.textContent?.includes('پاشەکەوت') || b.textContent?.includes('Save'));
+          if (textBtn) {
+            console.log("[Submit] Found button by text:", textBtn.textContent);
+            textBtn.click();
+            return { ok: true, method: "text-button.click" };
           }
 
-          // Method 3: Try any primary button
-          const primaryBtn = document.querySelector('.btn-primary');
-          if (primaryBtn) {
-            console.log("[Submit] Clicking primary button...");
-            primaryBtn.click();
-            return { ok: true, method: "primary.click" };
-          }
-
-          return { ok: false, error: "No form or submit button found" };
+          return { ok: false, error: "Save button not found" };
         }
       });
 
@@ -470,6 +493,35 @@ async function init() {
   const hostname = adminTab ? new URL(adminTab.url).hostname : "admin.pepu.krd";
   const optsUrl = chrome.runtime.getURL("options.html") + (hostname ? `?host=${encodeURIComponent(hostname)}` : "");
   document.getElementById("optsLink").href = optsUrl;
+
+  // AUTO-CONFIGURE SELECTORS for admin.pepu.krd
+  if (hostname === "admin.pepu.krd" || hostname === "www.admin.pepu.krd") {
+    const selectorConfig = {
+      questionSelector: 'textarea[name="Question.Content"], #question-content',
+      optionSelectors: [
+        'textarea[name="Question.Choices[0].Content"]',
+        'textarea[name="Question.Choices[1].Content"]',
+        'textarea[name="Question.Choices[2].Content"]',
+        'textarea[name="Question.Choices[3].Content"]'
+      ],
+      correctAnswerSelector: 'input[name="Question.CorrectAnswer"]',
+      correctAnswerCheckboxSelectors: [
+        'input[name="Question.Choices[0].IsCorrect"]',
+        'input[name="Question.Choices[1].IsCorrect"]',
+        'input[name="Question.Choices[2].IsCorrect"]',
+        'input[name="Question.Choices[3].IsCorrect"]'
+      ]
+    };
+
+    // Save to storage
+    await chrome.storage.local.set({
+      papuExt_mapping: {
+        "admin.pepu.krd": selectorConfig,
+        "www.admin.pepu.krd": selectorConfig
+      }
+    });
+    console.log("[Init] Auto-configured selectors for admin.pepu.krd");
+  }
 
   // Load subjects
   try {
