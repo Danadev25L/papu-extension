@@ -332,24 +332,36 @@ async function bulkCreate() {
       const saveClicked = await chrome.scripting.executeScript({
         target: { tabId: targetTab.id },
         func: () => {
-          // Find the specific save button with formaction="/Courses/Questions/Edit/0"
-          const saveBtn = document.querySelector('button[formaction="/Courses/Questions/Edit/0"], button[formaction*="/Questions/Edit"]');
-          if (saveBtn) {
-            console.log("[Submit] Found save button with formaction:", saveBtn.getAttribute('formaction'));
-            saveBtn.click();
-            return { ok: true, method: "save-button.click" };
+          console.log("[Submit] Looking for save button...");
+
+          // Find all buttons
+          const buttons = Array.from(document.querySelectorAll('button'));
+          console.log("[Submit] All buttons:", buttons.map(b => ({text: b.textContent?.slice(0, 30), formaction: b.getAttribute('formaction')})));
+
+          // Find the save button by text "پاشەکەوت"
+          const saveBtn = buttons.find(b => b.textContent?.includes('پاشەکەوت'));
+
+          if (!saveBtn) {
+            console.error("[Submit] Save button not found!");
+            return { ok: false, error: "Save button not found" };
           }
 
-          // Fallback: Find button with text "پاشەکەوت"
-          const allButtons = Array.from(document.querySelectorAll('button'));
-          const textBtn = allButtons.find(b => b.textContent?.includes('پاشەکەوت') || b.textContent?.includes('Save'));
-          if (textBtn) {
-            console.log("[Submit] Found button by text:", textBtn.textContent);
-            textBtn.click();
-            return { ok: true, method: "text-button.click" };
-          }
+          console.log("[Submit] Found save button:", saveBtn.textContent, saveBtn.outerHTML.slice(0, 200));
 
-          return { ok: false, error: "Save button not found" };
+          // Use a direct approach - focus then click
+          saveBtn.focus();
+          saveBtn.click();
+
+          // Also try to dispatch click on the button
+          setTimeout(() => {
+            saveBtn.dispatchEvent(new MouseEvent('click', {
+              bubbles: true,
+              cancelable: true,
+              view: window
+            }));
+          }, 100);
+
+          return { ok: true, method: "button.focus+click", buttonText: saveBtn.textContent };
         }
       });
 
