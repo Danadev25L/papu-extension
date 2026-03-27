@@ -322,127 +322,100 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           return;
         }
 
-        // Inject script to click save button and wait for navigation
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tabId },
-          func: () => {
-            return new Promise((resolve) => {
-              // Try multiple selectors to find the save button
-              let saveBtn = null;
+        console.log("[Background] CLICK_SAVE_AND_WAIT starting for tab:", tabId);
 
-              // Try common selectors
-              const selectors = [
-                'button[type="submit"]',
-                'input[type="submit"]',
-                'button.submit',
-                'button.btn-primary',
-                'button.btn.btn-primary',
-                'button[class*="submit"]',
-                'button[class*="Save"]',
-                'input[value*="Save"]',
-                'input[value*="خەزن"]',
-                'input[value*="حەزن"]',
-              ];
+        // Get current URL before clicking
+        const tab = await chrome.tabs.get(tabId);
+        const originalUrl = tab.url;
+        console.log("[Background] Original URL:", originalUrl);
 
-              for (const selector of selectors) {
-                const btn = document.querySelector(selector);
-                if (btn) {
-                  saveBtn = btn;
-                  console.log("[Papu] Found save button:", selector);
-                  break;
-                }
+        // Just click the save button - don't wait for navigation in injected script
+        console.log("[Background] About to executeScript...");
+        let results;
+        try {
+          results = await chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            func: () => {
+            console.log("[Injected] Looking for save button...");
+            let saveBtn = null;
+
+            // Try common selectors
+            const selectors = [
+              'button[type="submit"]',
+              'input[type="submit"]',
+              'button.submit',
+              'button.btn-primary',
+            ];
+
+            for (const selector of selectors) {
+              const btn = document.querySelector(selector);
+              if (btn) {
+                saveBtn = btn;
+                console.log("[Injected] Found save button:", selector, btn.textContent?.slice(0, 30));
+                break;
               }
+            }
 
-              // Try to find button by text content
-              if (!saveBtn) {
-                const buttons = Array.from(document.querySelectorAll('button'));
-                saveBtn = buttons.find(btn =>
-                  btn.textContent?.includes('Save') ||
-                  btn.textContent?.includes('خەزن') ||
-                  btn.textContent?.includes('حەزن')
-                );
-                if (saveBtn) console.log("[Papu] Found save button by text");
-              }
+            // Try by text content
+            if (!saveBtn) {
+              const buttons = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+              saveBtn = buttons.find(btn =>
+                btn.textContent?.toLowerCase().includes('save') ||
+                btn.textContent?.includes('خەزن') ||
+                btn.textContent?.includes('حەزن') ||
+                btn.value?.toLowerCase().includes('save')
+              );
+            }
 
-              if (!saveBtn) {
-                console.error("[Papu] No save button found. Tried selectors:", selectors);
-                resolve({ ok: false, error: "Save button not found" });
-                return;
-              }
+            if (!saveBtn) {
+              console.error("[Injected] No save button found!");
+              return { ok: false, error: "Save button not found" };
+            }
 
-              // Store current URL
-              const originalUrl = window.location.href;
-
-              // Listen for URL changes
-              const checkUrl = () => {
-                if (window.location.href !== originalUrl && window.location.href.includes("/Courses/View/")) {
-                  return true;
-                }
-                return false;
-              };
-
-              // Use multiple methods to detect navigation
-              let resolved = false;
-
-              // Method 1: popstate event
-              const onPopState = () => {
-                if (!resolved && checkUrl()) {
-                  resolved = true;
-                  window.removeEventListener("popstate", onPopState);
-                  resolve({ ok: true, newUrl: window.location.href });
-                }
-              };
-              window.addEventListener("popstate", onPopState);
-
-              // Method 2: MutationObserver for URL changes
-              const observer = new MutationObserver(() => {
-                if (!resolved && checkUrl()) {
-                  resolved = true;
-                  observer.disconnect();
-                  window.removeEventListener("popstate", onPopState);
-                  resolve({ ok: true, newUrl: window.location.href });
-                }
-              });
-              observer.observe(document.documentElement, { childList: true, subtree: true });
-
-              // Method 3: Poll URL as fallback
-              const urlCheckInterval = setInterval(() => {
-                if (!resolved && checkUrl()) {
-                  resolved = true;
-                  clearInterval(urlCheckInterval);
-                  observer.disconnect();
-                  window.removeEventListener("popstate", onPopState);
-                  resolve({ ok: true, newUrl: window.location.href });
-                }
-              }, 100);
-
-              // Timeout after 15 seconds
-              const timeout = setTimeout(() => {
-                if (!resolved) {
-                  resolved = true;
-                  clearInterval(urlCheckInterval);
-                  observer.disconnect();
-                  window.removeEventListener("popstate", onPopState);
-                  console.error("[Papu] Timeout waiting for save. Current URL:", window.location.href);
-                  resolve({ ok: false, error: "Timeout waiting for save", currentUrl: window.location.href });
-                }
-              }, 15000);
-
-              // Click the save button
-              console.log("[Papu] Clicking save button...");
-              saveBtn.click();
-              saveBtn.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-            });
+            console.log("[Injected] Clicking save button...");
+            saveBtn.click();
+            return { ok: true, clicked: true };
           }
         });
+        console.log("[Background] executeScript completed, results:", results);
 
-        const result = results?.[0]?.result;
-        if (result?.ok) {
-          sendResponse({ ok: true, newUrl: result.newUrl });
-        } else {
-          sendResponse({ ok: false, error: result?.error || "Failed to click save" });
+        } catch (execError) {
+          console.error("[Background] executeScript error:", execError);
+          sendResponse({ ok: false, error: "executeScript failed: " + (execError instanceof Error ? execError.message : String(execError)) });
+          return;
         }
+
+        const clickResult = results?.[0]?.result;
+        console.log("[Background] Click result:", clickResult);
+
+        if (!clickResult?.ok) {
+          sendResponse({ ok: false, error: clickResult?.error || "Failed to click save" });
+          return;
+        }
+
+        // Now wait for URL change by polling
+        console.log("[Background] Waiting for URL change...");
+        let checkCount = 0;
+        const maxChecks = 40; // 20 seconds max (40 * 500ms)
+
+        while (checkCount < maxChecks) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          checkCount++;
+
+          const updatedTab = await chrome.tabs.get(tabId);
+          if (updatedTab.url !== originalUrl) {
+            console.log("[Background] URL changed to:", updatedTab.url);
+            sendResponse({ ok: true, newUrl: updatedTab.url });
+            return;
+          }
+        }
+
+        // Timeout but button was clicked - assume success
+        console.log("[Background] Timeout waiting for URL change, but button was clicked");
+        sendResponse({ ok: true, newUrl: null, timeout: true });
+
       } catch (e) {
+        console.error("[Background] CLICK_SAVE_AND_WAIT error:", e);
         sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
       }
     })();

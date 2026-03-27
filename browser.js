@@ -222,6 +222,8 @@ async function bulkCreate() {
   const selectedIds = Array.from(state.selectedQuestions);
   const selectedQuestions = state.questions.filter(q => state.selectedQuestions.has(q.id));
 
+  console.log("[Bulk Create] Starting with questions:", selectedQuestions.map(q => q.id));
+
   // Show progress
   const bulkProgress = document.getElementById("bulkProgress");
   const bulkSection = document.getElementById("bulkSection");
@@ -234,6 +236,21 @@ async function bulkCreate() {
 
   let successCount = 0;
   let failCount = 0;
+
+  // Find target tab once
+  const tabs = await chrome.tabs.query({});
+  const targetTab = tabs.find(t =>
+    t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
+  );
+
+  if (!targetTab) {
+    showToast("❌ admin.pepu.kرد تاب نەدۆزرایەوە", "error");
+    bulkProgress.style.display = "none";
+    bulkCreateInProgress = false;
+    return;
+  }
+
+  console.log("[Bulk Create] Target tab:", targetTab.url);
 
   for (let i = 0; i < selectedQuestions.length; i++) {
     const q = selectedQuestions[i];
@@ -248,63 +265,125 @@ async function bulkCreate() {
     card?.classList.add("bulk-processing");
 
     try {
-      // First fill the form
-      const fillResult = await fillActive({
-        questionId: q.id,
-        questionText: q.questionText,
-        options: q.options || [],
-        correctAnswer: q.correctAnswer || "",
-      }, null);
+      console.log(`[Bulk Create] Processing question ${i + 1}:`, q.id);
+      console.log("[Bulk Create] Question text:", q.questionText?.slice(0, 50));
+      console.log("[Bulk Create] Options:", q.options);
 
-      if (!fillResult.ok) {
-        failCount++;
-        card?.classList.remove("bulk-processing");
-        card?.classList.add("bulk-error");
-        continue;
-      }
-
-      // Wait a bit for form to fill
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Click the save button
-      const tabs = await chrome.tabs.query({});
-      const targetTab = tabs.find(t =>
-        t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
-      );
-
-      if (!targetTab) {
-        failCount++;
-        card?.classList.remove("bulk-processing");
-        continue;
-      }
-
-      // Click save button and wait for redirect
-      const saveResult = await chrome.runtime.sendMessage({
-        type: "CLICK_SAVE_AND_WAIT",
-        tabId: targetTab.id
+      // First fill the form using background script
+      const fillResult = await chrome.runtime.sendMessage({
+        type: "FILL_SPECIFIC_TAB",
+        tabId: targetTab.id,
+        payload: {
+          questionId: q.id,
+          questionText: q.questionText,
+          options: q.options || [],
+          correctAnswer: q.correctAnswer || "",
+        }
       });
 
-      if (saveResult?.ok) {
-        successCount++;
-        card?.classList.remove("bulk-processing");
-        card?.classList.add("bulk-done");
+      console.log("[Bulk Create] Fill result:", fillResult);
+      console.log("[Bulk Create] Fill OK?:", fillResult?.ok);
+      console.log("[Bulk Create] Fields filled:", fillResult?.filled);
 
-        // Uncheck completed question
-        state.selectedQuestions.delete(q.id);
-        const checkbox = card?.querySelector(".q-checkbox");
-        if (checkbox) checkbox.checked = false;
+      if (!fillResult?.ok) {
+        console.error("[Bulk Create] Fill failed:", fillResult);
+        failCount++;
+        card?.classList.remove("bulk-processing");
+        showToast(`❌ پرسیار ${i + 1}: ${fillResult?.error || "پڕنەبووەوە"}`, "error");
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+
+      // Wait for form to be filled
+      await new Promise(resolve => setTimeout(resolve, 800));
+
+      // Click the save button using injected script - try multiple methods
+      console.log("[Bulk Create] Attempting to submit form...");
+      const saveClicked = await chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        func: () => {
+          // Method 1: Find the form and submit it directly
+          const form = document.querySelector('form[action*="/Questions"]');
+          if (form) {
+            console.log("[Submit] Found form, submitting...");
+            form.submit();
+            return { ok: true, method: "form.submit" };
+          }
+
+          // Method 2: Click submit button
+          const submitBtn = document.querySelector('button[type="submit"], input[type="submit"]');
+          if (submitBtn) {
+            console.log("[Submit] Clicking submit button...");
+            submitBtn.click();
+            return { ok: true, method: "button.click" };
+          }
+
+          // Method 3: Try any primary button
+          const primaryBtn = document.querySelector('.btn-primary');
+          if (primaryBtn) {
+            console.log("[Submit] Clicking primary button...");
+            primaryBtn.click();
+            return { ok: true, method: "primary.click" };
+          }
+
+          return { ok: false, error: "No form or submit button found" };
+        }
+      });
+
+      console.log("[Bulk Create] Save click result:", saveClicked);
+
+      if (saveClicked?.[0]?.result?.ok) {
+        showToast(`✓ پرسیار ${i + 1} پڕکرایەوە - save دەکرێت...`, "success");
+
+        // Wait for page navigation (URL change)
+        const originalUrl = targetTab.url;
+        let waited = 0;
+        const maxWait = 10000; // 10 seconds max
+
+        while (waited < maxWait) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          waited += 500;
+
+          const currentTab = await chrome.tabs.get(targetTab.id);
+          if (currentTab.url !== originalUrl) {
+            console.log("[Bulk Create] Page navigated to:", currentTab.url);
+            successCount++;
+            card?.classList.remove("bulk-processing");
+            card?.classList.add("bulk-done");
+
+            // Uncheck completed question
+            state.selectedQuestions.delete(q.id);
+            const checkbox = card?.querySelector(".q-checkbox");
+            if (checkbox) checkbox.checked = false;
+
+            // Navigate back to edit page for next question
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            await chrome.tabs.update(targetTab.id, {
+              url: `https://admin.pepu.krd/Courses/Questions/Edit?courseId=16`
+            });
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            break;
+          }
+        }
+
+        if (waited >= maxWait) {
+          console.log("[Bulk Create] Timeout waiting for navigation");
+          failCount++;
+          card?.classList.remove("bulk-processing");
+        }
       } else {
         failCount++;
         card?.classList.remove("bulk-processing");
+        showToast(`❌ Save button نەدۆزرایەوە`, "error");
       }
 
-      // Wait before next question (let page load)
-      await new Promise(resolve => setTimeout(resolve, 1500));
-
     } catch (e) {
-      console.error("Bulk create error for question", q.id, e);
+      console.error("[Bulk Create] Error for question", q.id, e);
       failCount++;
       card?.classList.remove("bulk-processing");
+      showToast(`❌ پرسیار ${i + 1}: ${e instanceof Error ? e.message : "هەڵە"}`, "error");
+      await new Promise(resolve => setTimeout(resolve, 1000));
     }
   }
 
@@ -321,6 +400,7 @@ async function bulkCreate() {
   }
 
   bulkCreateInProgress = false;
+  console.log("[Bulk Create] Finished. Success:", successCount, "Failed:", failCount);
 }
 
 async function loadSubjects() {
@@ -410,7 +490,7 @@ async function init() {
     console.error("Failed to load subjects:", e);
   }
 
-  // Load units from form
+  // Load units from form (optional, don't hide if fails)
   try {
     const units = await loadUnitsFromForm();
     if (units.length > 0) {
@@ -419,12 +499,13 @@ async function init() {
         [{ value: "", label: "هەڵبژێرە بەند" }, ...units],
         false
       );
-    } else {
-      document.getElementById("unitFilterWrapper").style.display = "none";
     }
+    // Always show unit filter - don't hide it
+    document.getElementById("unitFilterWrapper").style.display = "flex";
   } catch (e) {
-    console.log("Failed to load units:", e);
-    document.getElementById("unitFilterWrapper").style.display = "none";
+    console.log("Failed to load units from form:", e);
+    // Still show unit filter even if form load fails
+    document.getElementById("unitFilterWrapper").style.display = "flex";
   }
 
   // Event listeners
@@ -490,9 +571,6 @@ async function init() {
         [{ value: "", label: "هەڵبژێرە بەند" }, ...units],
         false
       );
-      if (units.length > 0) {
-        document.getElementById("unitFilterWrapper").style.display = "flex";
-      }
       btn.textContent = "✓ Done!";
       setTimeout(() => { btn.textContent = originalText; }, 1500);
     } catch (e) {
