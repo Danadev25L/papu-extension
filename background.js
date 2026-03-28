@@ -67,25 +67,84 @@ async function papuInjectedFill(payload, mapping) {
     const cleanQuestionText = stripQuestionNumber(payload.questionText);
     found.question = setNativeValue(el, cleanQuestionText);
 
-    // Also fill question image inputs if available
-    if (payload.questionImages && Array.isArray(payload.questionImages)) {
-      payload.questionImages.forEach((imageUrl, idx) => {
-        const imageInputSelectors = [
-          `input[name="Question.Image"]`,
-          `input[name="Question.Images[${idx}]"]`,
-          `input[name*="question"][name*="image"][type="text"]`,
-          `input[name*="Question"][name*="Image"][type="text"]`,
-          `#question-image`,
-        ];
-        for (const sel of imageInputSelectors) {
-          const imgInput = document.querySelector(sel);
-          if (imgInput && (imgInput.type === 'text' || imgInput.type === 'url')) {
-            setNativeValue(imgInput, imageUrl);
-            console.log(`[Fill] Set question image ${idx}:`, imageUrl);
-            break;
-          }
+    // Handle question images - similar to choice images, fetch and upload as file
+    if (payload.questionImages && Array.isArray(payload.questionImages) && payload.questionImages.length > 0) {
+      // Find question image file input
+      const qImageInputSelectors = [
+        `input[name="Question.Image"][type="file"]`,
+        `input[name="Question.Images[0]"][type="file"]`,
+        `input[name*="question"][name*="image"][type="file"]`,
+        `input[type="file"][accept*="image"]`,
+      ];
+
+      let qImageInput = null;
+      for (const sel of qImageInputSelectors) {
+        const input = document.querySelector(sel);
+        if (input) {
+          qImageInput = input;
+          console.log(`[Fill] Found question image input:`, sel);
+          break;
         }
-      });
+      }
+
+      if (qImageInput) {
+        try {
+          const imageUrl = payload.questionImages[0]; // Use first image
+          console.log(`[Fill] Fetching question image from:`, imageUrl);
+
+          // Convert relative URLs to absolute
+          let absoluteUrl = imageUrl;
+          if (imageUrl.startsWith('/uploads/')) {
+            absoluteUrl = 'https://pepumangment-backend.danabestun.dev' + imageUrl;
+          }
+
+          // Fetch the image and convert to blob
+          const imageResponse = await fetch(absoluteUrl);
+          if (!imageResponse.ok) {
+            console.log(`[Fill] Failed to fetch question image:`, imageResponse.status);
+          } else {
+            const blob = await imageResponse.blob();
+            const file = new File([blob], `question_image.jpg`, { type: blob.type || 'image/jpeg' });
+
+            // Create DataTransfer and dispatch change event
+            const dataTransfer = new DataTransfer();
+            dataTransfer.items.add(file);
+
+            // Set the files property
+            const fileInput = qImageInput;
+            Object.defineProperty(fileInput, 'files', {
+              value: dataTransfer.files,
+              writable: false
+            });
+
+            // Dispatch change event
+            fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+            console.log(`[Fill] Question image set successfully:`, imageUrl);
+          }
+        } catch (err) {
+          console.error(`[Fill] Failed to set question image:`, err);
+        }
+      } else {
+        console.log(`[Fill] No question image file input found, trying text inputs...`);
+
+        // Fallback to text inputs for image URLs
+        payload.questionImages.forEach((imageUrl, idx) => {
+          const textImageSelectors = [
+            `input[name="Question.Image"][type="text"]`,
+            `input[name="Question.Images[${idx}]"][type="text"]`,
+            `input[name*="question"][name*="image"][type="text"]`,
+            `#question-image`,
+          ];
+          for (const sel of textImageSelectors) {
+            const imgInput = document.querySelector(sel);
+            if (imgInput) {
+              setNativeValue(imgInput, imageUrl);
+              console.log(`[Fill] Set question image URL ${idx}:`, imageUrl);
+              break;
+            }
+          }
+        });
+      }
     }
   }
 
@@ -409,18 +468,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
 
         const payload = msg.payload || {};
+        console.log('[Background] About to execute script, payload:', payload);
         const results = await chrome.scripting.executeScript({
           target: { tabId: tabId, allFrames: true },
           func: papuInjectedFill,
           args: [payload, mapping],
         });
+        console.log('[Background] Script execution results:', results);
         const diagnostics = (results || []).map((x) => x.result).filter(Boolean);
+        console.log('[Background] Diagnostics:', diagnostics);
         const diag = diagnostics.find((d) => {
           const n = [d?.question, ...(d?.options || []), d?.correct].filter(Boolean).length;
           return n > 0;
         }) || diagnostics[0];
         const okCount = [diag?.question, ...(diag?.options || []), diag?.correct].filter(Boolean).length;
         const total = 1 + (payload?.options?.length || 0) + (payload?.correctAnswer ? 1 : 0);
+        console.log('[Background] okCount:', okCount, 'total:', total);
         if (okCount === 0) {
           sendResponse({ ok: false, error: "No fields found. Check selectors in options." });
         } else {
