@@ -292,10 +292,8 @@ function renderQuestions() {
       card.style.border = "3px solid red";
       setTimeout(() => card.style.border = "", 500);
 
-      console.log('[Click] Question', q.id, 'choiceImages:', q.choiceImages, 'keys:', Object.keys(q.choiceImages || {}));
-      console.log('[Click] questionImages:', q.questionImages, 'length:', q.questionImages?.length);
-      console.log('[Click] Has question images?', (q.questionImages?.length ?? 0) > 0);
-      console.log('[Click] Full question data:', JSON.stringify({id: q.id, choiceImages: q.choiceImages, questionImages: q.questionImages}));
+      console.log('[Click] Question', q.id, 'choiceImages:', Object.keys(q.choiceImages || {}).length, 'items');
+      console.log('[Click] questionImages:', q.questionImages?.length || 0, 'items');
 
       await fillActive({
         questionId: q.id,
@@ -303,8 +301,8 @@ function renderQuestions() {
         options: q.options || [],
         correctAnswer: q.correctAnswer || "",
         unitId: state.unitId || undefined,  // Include selected unit
-        questionImages: q.questionImages,  // Include question images
-        choiceImages: q.choiceImages  // Include choice images
+        questionImages: q.questionImages || [],  // Include question images (default to empty array)
+        choiceImages: q.choiceImages || {}  // Include choice images (default to empty object)
       }, card);
     });
 
@@ -638,15 +636,7 @@ async function loadQuestions() {
   const qs = params.toString();
   const path = `/extension/subjects/${state.subjectId}/questions${qs ? "?" + qs : ""}`;
   const data = await apiFetch(path);
-  const questions = data.questions || [];
-
-  // Debug: log first question to see structure
-  if (questions.length > 0) {
-    console.log('[LoadQuestions] First question data:', JSON.stringify(questions[0], null, 2));
-    console.log('[LoadQuestions] questionImages field:', questions[0].questionImages);
-  }
-
-  return questions;
+  return data.questions || [];
 }
 
 async function refreshQuestions() {
