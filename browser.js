@@ -293,7 +293,9 @@ function renderQuestions() {
       setTimeout(() => card.style.border = "", 500);
 
       console.log('[Click] Question', q.id, 'choiceImages:', q.choiceImages, 'keys:', Object.keys(q.choiceImages || {}));
-      console.log('[Click] Full question data:', JSON.stringify({id: q.id, choiceImages: q.choiceImages}));
+      console.log('[Click] questionImages:', q.questionImages, 'length:', q.questionImages?.length);
+      console.log('[Click] Has question images?', (q.questionImages?.length ?? 0) > 0);
+      console.log('[Click] Full question data:', JSON.stringify({id: q.id, choiceImages: q.choiceImages, questionImages: q.questionImages}));
 
       await fillActive({
         questionId: q.id,
@@ -636,7 +638,15 @@ async function loadQuestions() {
   const qs = params.toString();
   const path = `/extension/subjects/${state.subjectId}/questions${qs ? "?" + qs : ""}`;
   const data = await apiFetch(path);
-  return data.questions || [];
+  const questions = data.questions || [];
+
+  // Debug: log first question to see structure
+  if (questions.length > 0) {
+    console.log('[LoadQuestions] First question data:', JSON.stringify(questions[0], null, 2));
+    console.log('[LoadQuestions] questionImages field:', questions[0].questionImages);
+  }
+
+  return questions;
 }
 
 async function refreshQuestions() {
