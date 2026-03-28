@@ -15,6 +15,8 @@ chrome.action.onClicked.addListener(async (tab) => {
  * - unitId: Unit selection
  */
 async function papuInjectedFill(payload, mapping) {
+  console.log('[Injected] papuInjectedFill called!', 'payload keys:', Object.keys(payload || {}), 'mapping:', mapping);
+
   function findEl(selStr) {
     if (!selStr || typeof selStr !== "string") return null;
     const parts = String(selStr).split(",").map((s) => s.trim()).filter(Boolean);
@@ -62,10 +64,16 @@ async function papuInjectedFill(payload, mapping) {
   }
 
   const qSel = mapping.questionSelector;
+  console.log('[Fill] questionSelector:', qSel);
+  console.log('[Fill] questionText:', payload.questionText?.slice(0, 50));
   if (qSel && payload.questionText) {
     const el = findEl(qSel);
+    console.log('[Fill] Question element found:', !!el, el?.tagName, el?.name);
     const cleanQuestionText = stripQuestionNumber(payload.questionText);
     found.question = setNativeValue(el, cleanQuestionText);
+    console.log('[Fill] Question set successfully:', found.question);
+  } else {
+    console.log('[Fill] Skipping question - qSel:', !!qSel, 'questionText:', !!payload.questionText);
   }
 
   // Set unit if provided in payload
@@ -88,10 +96,15 @@ async function papuInjectedFill(payload, mapping) {
   const choiceTextareas = Array.from(document.querySelectorAll("textarea"))
     .filter(t => (t.name || "").includes("Choices"));
 
+  console.log('[Fill] Found choice textareas:', choiceTextareas.length, choiceTextareas.map(t => t.name));
+  console.log('[Fill] Options to fill:', payload.options?.length);
+
   (payload.options || []).forEach((text, i) => {
     const cleanText = stripOptionLabel(text);
     const el = choiceTextareas[i];
-    found.options.push(setNativeValue(el, cleanText));
+    const result = setNativeValue(el, cleanText);
+    found.options.push(result);
+    console.log('[Fill] Option', i, 'element:', el?.name, 'result:', result);
   });
 
   // Handle choice images - fetch image and simulate drop/paste event
@@ -355,12 +368,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     (async () => {
       try {
         const tabId = msg.tabId;
+        console.log('[Background] FILL_SPECIFIC_TAB with tabId:', tabId);
+
         if (!tabId) {
           sendResponse({ ok: false, error: "No tab ID provided" });
           return;
         }
 
         const tab = await chrome.tabs.get(tabId);
+        console.log('[Background] Found tab:', tab.id, tab.url);
         if (!tab?.url) {
           sendResponse({ ok: false, error: "Tab not found" });
           return;
@@ -388,11 +404,35 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
 
         const payload = msg.payload || {};
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tabId, allFrames: true },
-          func: papuInjectedFill,
-          args: [payload, mapping],
-        });
+        console.log('[Background] About to executeScript on tab:', tabId, 'URL:', tab.url);
+
+        // First test: inject a simple script to see if injection works at all
+        try {
+          await chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            func: () => { console.log('[TEST] Simple script injection works!'); }
+          });
+          console.log('[Background] Test injection SUCCESS');
+        } catch (testError) {
+          console.error('[Background] Test injection FAILED:', testError);
+          sendResponse({ ok: false, error: "Cannot inject scripts: " + testError.message });
+          return;
+        }
+
+        let results;
+        try {
+          results = await chrome.scripting.executeScript({
+            target: { tabId: tabId },  // Removed allFrames: true
+            func: papuInjectedFill,
+            args: [payload, mapping],
+          });
+          console.log('[Background] executeScript SUCCESS, results:', results);
+        } catch (execError) {
+          console.error('[Background] executeScript FAILED:', execError);
+          sendResponse({ ok: false, error: "Script execution failed: " + execError.message });
+          return;
+        }
+
         const diagnostics = (results || []).map((x) => x.result).filter(Boolean);
         const diag = diagnostics.find((d) => {
           const n = [d?.question, ...(d?.options || []), d?.correct].filter(Boolean).length;

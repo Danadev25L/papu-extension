@@ -141,9 +141,13 @@ function filteredQuestions() {
 async function fillActive(payload, cardElement) {
   try {
     const tabs = await chrome.tabs.query({});
+    console.log('[fillActive] All tabs:', tabs.map(t => ({id: t.id, url: t.url})));
+
     const targetTab = tabs.find(t =>
       t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
     );
+
+    console.log('[fillActive] Target tab:', targetTab ? {id: targetTab.id, url: targetTab.url} : 'NOT FOUND');
 
     if (!targetTab) {
       showToast("admin.pepu.krd تاب نەدۆزرایەوە", "error");
