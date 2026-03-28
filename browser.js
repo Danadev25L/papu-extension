@@ -301,6 +301,7 @@ function renderQuestions() {
         options: q.options || [],
         correctAnswer: q.correctAnswer || "",
         unitId: state.unitId || undefined,  // Include selected unit
+        questionImages: q.questionImages,  // Include question images
         choiceImages: q.choiceImages  // Include choice images
       }, card);
     });
@@ -432,6 +433,7 @@ async function bulkCreate() {
           options: q.options || [],
           correctAnswer: q.correctAnswer || "",
           unitId: state.unitId || undefined,  // Include selected unit
+          questionImages: q.questionImages,  // Include question images
           choiceImages: q.choiceImages  // Include choice images
         }
       });
