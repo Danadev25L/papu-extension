@@ -158,6 +158,9 @@ async function fillActive(payload, cardElement) {
     // Use payload.choiceImages (from question) first, fallback to state (user uploaded)
     const enrichedPayload = {
       ...payload,
+      questionImages: (payload.questionImages && payload.questionImages.length > 0)
+        ? payload.questionImages
+        : state.questionImages,
       choiceImages: (payload.choiceImages && Object.keys(payload.choiceImages).length > 0)
         ? payload.choiceImages
         : state.choiceImages
@@ -300,6 +303,7 @@ function renderQuestions() {
         options: q.options || [],
         correctAnswer: q.correctAnswer || "",
         unitId: state.unitId || undefined,
+        questionImages: q.questionImages || [],
         choiceImages: q.choiceImages || {}
       }, card);
     });
@@ -431,6 +435,7 @@ async function bulkCreate() {
           options: q.options || [],
           correctAnswer: q.correctAnswer || "",
           unitId: state.unitId || undefined,
+          questionImages: q.questionImages || [],
           choiceImages: q.choiceImages || {}
         }
       });

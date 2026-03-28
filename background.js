@@ -72,6 +72,46 @@ async function papuInjectedFill(payload, mapping) {
     const cleanQuestionText = stripQuestionNumber(payload.questionText);
     found.question = setNativeValue(el, cleanQuestionText);
     console.log('[Fill] Question set successfully:', found.question);
+
+    // Handle question images - fetch and drop like choice images
+    if (payload.questionImages && Array.isArray(payload.questionImages) && payload.questionImages.length > 0) {
+      if (el && el.tagName === "TEXTAREA") {
+        const imageUrl = payload.questionImages[0];
+        let absoluteUrl = imageUrl;
+        if (imageUrl.startsWith('/uploads/')) {
+          absoluteUrl = 'https://pepumangment-backend.danabestun.dev' + imageUrl;
+        }
+
+        console.log('[Fill] Question image - fetching from:', absoluteUrl);
+
+        try {
+          // Fetch the image and convert to blob
+          const imageResponse = await fetch(absoluteUrl);
+          if (!imageResponse.ok) {
+            console.log('[Fill] Failed to fetch question image:', imageResponse.status);
+          } else {
+            const blob = await imageResponse.blob();
+            const file = new File([blob], `question_image.jpg`, { type: blob.type || 'image/jpeg' });
+
+            // Create DataTransfer and dispatch drop event
+            const dataTransfer = new DataTransfer();
+            dataTransfer.items.add(file);
+
+            const dropEvent = new DragEvent('drop', {
+              bubbles: true,
+              cancelable: true,
+              dataTransfer: dataTransfer
+            });
+
+            el.dispatchEvent(dropEvent);
+            console.log('[Fill] Question image - dispatched drop event');
+            await new Promise(r => setTimeout(r, 1500));
+          }
+        } catch (err) {
+          console.error('[Fill] Failed to set question image:', err);
+        }
+      }
+    }
   } else {
     console.log('[Fill] Skipping question - qSel:', !!qSel, 'questionText:', !!payload.questionText);
   }
