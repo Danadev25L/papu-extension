@@ -150,13 +150,10 @@ async function fillActive(payload, cardElement) {
       return { ok: false, error: "Tab not found" };
     }
 
-    // Include current state's question images and choice images
+    // Include current state's choice images
     // Use payload.choiceImages (from question) first, fallback to state (user uploaded)
     const enrichedPayload = {
       ...payload,
-      questionImages: (payload.questionImages?.length ?? 0) > 0
-        ? payload.questionImages
-        : state.questionImages,
       choiceImages: (payload.choiceImages && Object.keys(payload.choiceImages).length > 0)
         ? payload.choiceImages
         : state.choiceImages
@@ -207,8 +204,8 @@ function renderQuestions() {
   }
 
   items.forEach((q) => {
-    // Debug: log choice images from backend
-    console.log('[Browser] Question', q.id, 'choiceImages:', q.choiceImages, 'keys:', Object.keys(q.choiceImages || {}));
+    // Debug: check question images
+    console.log('[Render] Question', q.questionNumber, 'questionImages:', q.questionImages);
 
     const card = document.createElement("div");
     card.className = "q-card";
@@ -240,6 +237,7 @@ function renderQuestions() {
           ${hasChoiceImages ? `<span class="q-images">🖼️ ${Object.keys(q.choiceImages || {}).length}</span>` : ""}
         </div>
       </div>
+      ${hasQuestionImages ? `<div class="q-question-image"><img src="${escapeHtml(q.questionImages[0])}" alt="Question image" loading="lazy"></div>` : ""}
       <p class="q-text">${escapeHtml((q.questionText || "").slice(0, 200))}${(q.questionText || "").length > 200 ? "..." : ""}</p>
       ${(q.options || []).length > 0 ? `
         <div class="q-options">
@@ -292,17 +290,13 @@ function renderQuestions() {
       card.style.border = "3px solid red";
       setTimeout(() => card.style.border = "", 500);
 
-      console.log('[Click] Question', q.id, 'choiceImages:', Object.keys(q.choiceImages || {}).length, 'items');
-      console.log('[Click] questionImages:', q.questionImages?.length || 0, 'items');
-
       await fillActive({
         questionId: q.id,
         questionText: q.questionText,
         options: q.options || [],
         correctAnswer: q.correctAnswer || "",
-        unitId: state.unitId || undefined,  // Include selected unit
-        questionImages: q.questionImages || [],  // Include question images (default to empty array)
-        choiceImages: q.choiceImages || {}  // Include choice images (default to empty object)
+        unitId: state.unitId || undefined,
+        choiceImages: q.choiceImages || {}
       }, card);
     });
 
@@ -432,9 +426,8 @@ async function bulkCreate() {
           questionText: q.questionText,
           options: q.options || [],
           correctAnswer: q.correctAnswer || "",
-          unitId: state.unitId || undefined,  // Include selected unit
-          questionImages: q.questionImages,  // Include question images
-          choiceImages: q.choiceImages  // Include choice images
+          unitId: state.unitId || undefined,
+          choiceImages: q.choiceImages || {}
         }
       });
 
@@ -636,7 +629,13 @@ async function loadQuestions() {
   const qs = params.toString();
   const path = `/extension/subjects/${state.subjectId}/questions${qs ? "?" + qs : ""}`;
   const data = await apiFetch(path);
-  return data.questions || [];
+  const questions = data.questions || [];
+
+  // Log questions with images
+  const withImages = questions.filter(q => (q.questionImages?.length ?? 0) > 0);
+  console.log('[LoadQuestions] Questions with images:', withImages.map(q => ({number: q.questionNumber, images: q.questionImages?.length})));
+
+  return questions;
 }
 
 async function refreshQuestions() {

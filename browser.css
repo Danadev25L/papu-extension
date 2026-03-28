@@ -263,6 +263,22 @@ body {
   line-height: 1.6;
 }
 
+.q-question-image {
+  margin-bottom: 12px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.q-question-image img {
+  width: 100%;
+  height: auto;
+  max-height: 200px;
+  object-fit: contain;
+  display: block;
+}
+
 .q-options {
   display: flex;
   flex-wrap: wrap;
