@@ -26,6 +26,7 @@ let state = {
   examYear: "",
   examPeriod: "",
   unitId: "",
+  adminUnitId: "",
   selectedQuestions: new Set(), // Track selected question IDs for bulk create
   questionImages: [], // Store uploaded question image URLs
   choiceImages: {} // Store uploaded choice image URLs: {0: url, 1: url, ...}
@@ -631,14 +632,35 @@ async function loadUnitsFromForm() {
   return [];
 }
 
+// Load units from API (our units)
+async function loadUnitsFromApi(subjectId) {
+  if (!subjectId) return [];
+
+  const params = new URLSearchParams({ subjectId });
+  const data = await apiFetch(`/rag/units?${params}`);
+  return (data.units || []).map(u => ({
+    value: u.id,
+    label: `${u.unit_number} — ${u.name_ku || u.name}`
+  }));
+}
+
 async function loadQuestions() {
   const params = new URLSearchParams();
   if (state.examYear && state.examYear !== ALL) params.set("examYear", state.examYear);
   if (state.examPeriod && state.examPeriod !== ALL) params.set("examPeriod", state.examPeriod);
+  if (state.adminUnitId) params.set("adminUnitId", state.adminUnitId);
   const qs = params.toString();
   const path = `/extension/subjects/${state.subjectId}/questions${qs ? "?" + qs : ""}`;
   const data = await apiFetch(path);
-  const questions = data.questions || [];
+  let questions = data.questions || [];
+
+  // Client-side filter by our unitId
+  if (state.unitId) {
+    questions = questions.filter(q =>
+      q.unitId === state.unitId || q.unitId2 === state.unitId ||
+      q.unit_id === state.unitId
+    );
+  }
 
   // Log questions with images
   const withImages = questions.filter(q => (q.questionImages?.length ?? 0) > 0);
@@ -724,31 +746,41 @@ async function init() {
       false
     );
     fillSelect(document.getElementById("filterUnit"), [{ value: "", label: "هەڵبژێرە بەند" }], false);
+    fillSelect(document.getElementById("filterAdminUnit"), [{ value: "", label: "هەڵبژێرە بەند" }], false);
   } catch (e) {
     console.error("Failed to load subjects:", e);
   }
 
-  // Load units from form (optional, don't hide if fails)
+  // Load admin units from form (optional, don't hide if fails)
   try {
-    const units = await loadUnitsFromForm();
-    if (units.length > 0) {
+    const adminUnits = await loadUnitsFromForm();
+    if (adminUnits.length > 0) {
       fillSelect(
-        document.getElementById("filterUnit"),
-        [{ value: "", label: "هەڵبژێرە بەند" }, ...units],
+        document.getElementById("filterAdminUnit"),
+        [{ value: "", label: "هەڵبژێرە بەند" }, ...adminUnits],
         false
       );
     }
-    // Always show unit filter - don't hide it
-    document.getElementById("unitFilterWrapper").style.display = "flex";
+    document.getElementById("adminUnitFilterWrapper").style.display = "flex";
   } catch (e) {
-    console.log("Failed to load units from form:", e);
-    // Still show unit filter even if form load fails
-    document.getElementById("unitFilterWrapper").style.display = "flex";
+    console.log("Failed to load admin units from form:", e);
+    document.getElementById("adminUnitFilterWrapper").style.display = "flex";
   }
+
+  // Always show unit filters
+  document.getElementById("unitFilterWrapper").style.display = "flex";
 
   // Event listeners
   document.getElementById("filterSubject").addEventListener("change", async (e) => {
     state.subjectId = e.target.value;
+    state.unitId = "";
+    // Load our units from API when subject changes
+    const units = await loadUnitsFromApi(state.subjectId);
+    fillSelect(
+      document.getElementById("filterUnit"),
+      [{ value: "", label: "هەڵبژێرە بەند" }, ...units],
+      false
+    );
     refreshQuestions();
   });
 
@@ -764,6 +796,11 @@ async function init() {
 
   document.getElementById("filterUnit").addEventListener("change", async (e) => {
     state.unitId = e.target.value;
+    refreshQuestions();
+  });
+
+  document.getElementById("filterAdminUnit").addEventListener("change", async (e) => {
+    state.adminUnitId = e.target.value;
     // Sync to admin.pepu.krd form
     if (e.target.value) {
       try {
@@ -785,9 +822,10 @@ async function init() {
           });
         }
       } catch (err) {
-        console.log("Failed to sync unit:", err);
+        console.log("Failed to sync admin unit:", err);
       }
     }
+    refreshQuestions();
   });
 
   document.getElementById("searchInput").addEventListener("input", renderQuestions);
@@ -805,7 +843,7 @@ async function init() {
     try {
       const units = await loadUnitsFromForm();
       fillSelect(
-        document.getElementById("filterUnit"),
+        document.getElementById("filterAdminUnit"),
         [{ value: "", label: "هەڵبژێرە بەند" }, ...units],
         false
       );

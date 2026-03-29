@@ -19,7 +19,7 @@ const EXAM_PERIODS = [
   { value: "second_term", label: "قۆناغی دووەم" },
 ];
 
-let state = { subjects: [], questions: [], subjectId: "", examYear: "", examPeriod: "", unitId: "" };
+let state = { subjects: [], questions: [], subjectId: "", examYear: "", examPeriod: "", unitId: "", adminUnitId: "" };
 let selectedIndex = -1;
 
 async function apiFetch(path) {
@@ -157,10 +157,21 @@ async function loadSubjects() {
   return data.subjects || [];
 }
 
+// Load units from API (our units)
 async function loadUnits(subjectId) {
   if (!subjectId) return [];
 
-  // First, try to fetch units from the admin.pepu.krd form dropdown
+  const params = new URLSearchParams({ subjectId });
+  const data = await apiFetch(`/rag/units?${params}`);
+  return (data.units || []).map(u => ({
+    id: u.id,
+    value: u.id,
+    label: `${u.unit_number} — ${u.name_ku || u.name}`
+  }));
+}
+
+// Load units from admin.pepu.krd dropdown (admin units)
+async function loadAdminUnits() {
   try {
     const tabs = await chrome.tabs.query({});
     const adminTab = tabs.find(t =>
@@ -185,27 +196,32 @@ async function loadUnits(subjectId) {
       }
     }
   } catch (e) {
-    console.log("Could not fetch units from form:", e);
+    console.log("Could not fetch admin units from form:", e);
   }
 
-  // Fallback: fetch from API
-  const params = new URLSearchParams({ subjectId });
-  const data = await apiFetch(`/rag/units?${params}`);
-  return (data.units || []).map(u => ({
-    value: u.id,
-    label: `${u.unit_number} — ${u.name_ku || u.name}`
-  }));
+  return [];
 }
 
 async function loadQuestions() {
   const params = new URLSearchParams();
   if (state.examYear && state.examYear !== ALL) params.set("examYear", state.examYear);
   if (state.examPeriod && state.examPeriod !== ALL) params.set("examPeriod", state.examPeriod);
-  if (state.unitId) params.set("unitId", state.unitId);
+  // Filter by admin unit via API (if questions have admin unit mapping)
+  if (state.adminUnitId) params.set("adminUnitId", state.adminUnitId);
   const qs = params.toString();
   const path = `/extension/subjects/${state.subjectId}/questions${qs ? "?" + qs : ""}`;
   const data = await apiFetch(path);
-  return data.questions || [];
+  let questions = data.questions || [];
+
+  // Client-side filter by our unitId (if not already filtered by API)
+  if (state.unitId) {
+    questions = questions.filter(q =>
+      q.unitId === state.unitId || q.unitId2 === state.unitId ||
+      q.unit_id === state.unitId
+    );
+  }
+
+  return questions;
 }
 
 async function refreshQuestions() {
@@ -277,17 +293,28 @@ async function init() {
   document.getElementById("filterSubject").addEventListener("change", async (e) => {
     state.subjectId = e.target.value;
     state.unitId = "";
-    // Load and populate units
+    state.adminUnitId = "";
+
+    // Load and populate our units (API)
     const units = await loadUnits(state.subjectId);
     fillSelect(
       document.getElementById("filterUnit"),
       [{ value: "", label: "هەموو بەندەکان" }, ...units.map(u => ({
         value: u.id,
-        label: `${u.unit_number} — ${u.name_ku || u.name}`
+        label: u.label
       }))],
       false
     );
-    document.getElementById("unitSection").style.display = units.length ? "grid" : "none";
+
+    // Load and populate admin units (from admin.pepu.krd)
+    const adminUnits = await loadAdminUnits();
+    fillSelect(
+      document.getElementById("filterAdminUnit"),
+      [{ value: "", label: "هەموو" }, ...adminUnits],
+      false
+    );
+
+    document.getElementById("unitSection").style.display = (units.length || adminUnits.length) ? "grid" : "none";
     refreshQuestions();
   });
 
@@ -306,6 +333,11 @@ async function init() {
     refreshQuestions();
   });
 
+  document.getElementById("filterAdminUnit").addEventListener("change", (e) => {
+    state.adminUnitId = e.target.value;
+    refreshQuestions();
+  });
+
   document.getElementById("openBrowserBtn").addEventListener("click", async () => {
     const url = chrome.runtime.getURL("browser.html");
     await chrome.tabs.create({ url });
@@ -316,18 +348,22 @@ async function init() {
   // Listen for sync messages from browser tab
   chrome.runtime.onMessage.addListener((message) => {
     if (message.type === "BROWSER_FILTERS_APPLIED") {
-      const { subjectId, examYear, examPeriod, unitId } = message.filters;
+      const { subjectId, examYear, examPeriod, unitId, adminUnitId } = message.filters;
       // Update popup state and filters
       state.subjectId = subjectId;
       state.examYear = examYear;
       state.examPeriod = examPeriod;
       state.unitId = unitId || "";
+      state.adminUnitId = adminUnitId || "";
       // Update dropdown values
       document.getElementById("filterSubject").value = subjectId;
       document.getElementById("filterYear").value = examYear;
       document.getElementById("filterPeriod").value = examPeriod;
       if (unitId) {
         document.getElementById("filterUnit").value = unitId;
+      }
+      if (adminUnitId) {
+        document.getElementById("filterAdminUnit").value = adminUnitId;
       }
       refreshQuestions();
     }
@@ -373,8 +409,15 @@ async function init() {
       document.getElementById("filterUnit"),
       [{ value: "", label: "هەموو بەندەکان" }, ...units.map(u => ({
         value: u.id,
-        label: `${u.unit_number} — ${u.name_ku || u.name}`
+        label: u.label
       }))],
+      false
+    );
+    // Load admin units
+    const adminUnits = await loadAdminUnits();
+    fillSelect(
+      document.getElementById("filterAdminUnit"),
+      [{ value: "", label: "هەموو" }, ...adminUnits],
       false
     );
     // Apply filters
@@ -382,13 +425,17 @@ async function init() {
     state.examYear = f.examYear || "";
     state.examPeriod = f.examPeriod || "";
     state.unitId = f.unitId || "";
+    state.adminUnitId = f.adminUnitId || "";
     document.getElementById("filterSubject").value = f.subjectId;
     document.getElementById("filterYear").value = f.examYear || "";
     document.getElementById("filterPeriod").value = f.examPeriod || "";
     if (f.unitId) {
       document.getElementById("filterUnit").value = f.unitId;
     }
-    document.getElementById("unitSection").style.display = units.length && f.unitId ? "grid" : "none";
+    if (f.adminUnitId) {
+      document.getElementById("filterAdminUnit").value = f.adminUnitId;
+    }
+    document.getElementById("unitSection").style.display = (units.length || adminUnits.length) ? "grid" : "none";
     await refreshQuestions();
     // Clear stored filters after applying
     await chrome.storage.local.remove(["papu_browser_filters"]);
