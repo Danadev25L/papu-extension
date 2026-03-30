@@ -173,10 +173,30 @@ body {
   padding: 12px;
   background: var(--bg-card);
   border-radius: var(--radius-sm);
-  text-align: center;
   color: var(--text-muted);
   font-size: 13px;
   border: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-link.select-all-btn {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-link.select-all-btn:hover {
+  background: rgba(139, 92, 246, 0.2);
+  color: #c4b5fd;
 }
 
 /* Questions */

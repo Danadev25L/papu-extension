@@ -206,6 +206,9 @@ function renderQuestions() {
   const items = filteredQuestions();
   countLabel.textContent = `${items.length} پرسیار`;
 
+  // Update select all button state
+  updateSelectAllButton();
+
   if (items.length === 0) {
     container.innerHTML = `<p class="empty">هیچ پرسیارێک نەدۆزرایەوە.</p>`;
     return;
@@ -352,6 +355,46 @@ function clearSelections() {
     if (checkbox) checkbox.checked = false;
   });
   updateBulkUI();
+}
+
+// Select or deselect all visible questions
+function toggleSelectAll() {
+  const items = filteredQuestions();
+  const allSelected = items.length > 0 && items.every(q => state.selectedQuestions.has(q.id));
+
+  if (allSelected) {
+    // Deselect all
+    state.selectedQuestions.clear();
+  } else {
+    // Select all visible questions
+    items.forEach(q => state.selectedQuestions.add(q.id));
+  }
+
+  // Update UI
+  document.querySelectorAll(".q-card").forEach(card => {
+    const checkbox = card.querySelector(".q-checkbox");
+    const questionId = checkbox?.dataset.id;
+    if (questionId && state.selectedQuestions.has(questionId)) {
+      card.classList.add("selected");
+      if (checkbox) checkbox.checked = true;
+    } else {
+      card.classList.remove("selected");
+      if (checkbox) checkbox.checked = false;
+    }
+  });
+
+  updateBulkUI();
+  updateSelectAllButton();
+}
+
+// Update select all button text
+function updateSelectAllButton() {
+  const btn = document.getElementById("selectAllBtn");
+  const items = filteredQuestions();
+  if (!btn || items.length === 0) return;
+
+  const allSelected = items.every(q => state.selectedQuestions.has(q.id));
+  btn.textContent = allSelected ? "پەچەکردن" : "هەڵبژاردنی هەموو";
 }
 
 // Bulk create questions
@@ -835,6 +878,9 @@ async function init() {
 
   // Clear selection button
   document.getElementById("clearSelectionBtn").addEventListener("click", clearSelections);
+
+  // Select all button
+  document.getElementById("selectAllBtn").addEventListener("click", toggleSelectAll);
 
   document.getElementById("refreshUnitsBtn").addEventListener("click", async () => {
     const btn = document.getElementById("refreshUnitsBtn");
