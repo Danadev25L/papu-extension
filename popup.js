@@ -21,6 +21,7 @@ const EXAM_PERIODS = [
 
 let state = { subjects: [], questions: [], subjectId: "", examYear: "", examPeriod: "", unitId: "", adminUnitId: "" };
 let selectedIndex = -1;
+let selectedIndices = new Set();
 
 async function apiFetch(path) {
   // Try production first, fallback to localhost on error
@@ -115,9 +116,23 @@ function renderList() {
   empty.hidden = true;
   if (selectedIndex >= items.length) selectedIndex = 0;
   if (fillNextBtn) fillNextBtn.disabled = false;
+
+  const selectAllBtn = document.getElementById("selectAllBtn");
+  const fillSelectedBtn = document.getElementById("fillSelectedBtn");
+  if (selectAllBtn) selectAllBtn.textContent = selectedIndices.size === items.length ? "پەچەکردن" : "هەڵبژاردنی هەموو";
+  if (fillSelectedBtn) {
+    fillSelectedBtn.disabled = selectedIndices.size === 0;
+    fillSelectedBtn.textContent = selectedIndices.size > 0
+      ? `بارکردنی ${selectedIndices.size} پرسیار`
+      : "بارکردنی هەڵبژێردراو";
+  }
+  const clearSelectionBtn = document.getElementById("clearSelectionBtn");
+  if (selectAllBtn) selectAllBtn.textContent = selectedIndices.size === items.length ? "پەچەکردن" : "هەڵبژاردنی هەموو";
+
   items.forEach((q, idx) => {
     const li = document.createElement("li");
-    li.className = "q-item" + (idx === selectedIndex ? " selected" : "");
+    const isSelected = selectedIndices.has(idx) || idx === selectedIndex;
+    li.className = "q-item" + (isSelected ? " selected" : "");
     li.dataset.index = String(idx);
     li.dataset.payload = JSON.stringify({
       questionText: q.questionText,
@@ -127,11 +142,20 @@ function renderList() {
       unitNumber: q.unitNumber || q.unitNumber2 || undefined,
       unitNameKu: q.unitNameKu || undefined,
     });
-    li.innerHTML = `<span>#${q.questionNumber}</span> — ${escapeHtml((q.questionText || "").slice(0, 120))}${(q.questionText || "").length > 120 ? "…" : ""}<small>${(q.options || []).length} هەڵبژاردن</small>`;
-    li.addEventListener("click", () => {
-      selectedIndex = idx;
+    const checkbox = `<input type="checkbox" class="q-checkbox" ${selectedIndices.has(idx) ? "checked" : ""}>`;
+    li.innerHTML = `${checkbox}<span>#${q.questionNumber}</span> — ${escapeHtml((q.questionText || "").slice(0, 120))}${(q.questionText || "").length > 120 ? "…" : ""}<small>${(q.options || []).length} هەڵبژاردن</small>`;
+    li.addEventListener("click", (e) => {
+      if (e.target.classList.contains("q-checkbox")) {
+        if (selectedIndices.has(idx)) {
+          selectedIndices.delete(idx);
+        } else {
+          selectedIndices.add(idx);
+        }
+      } else {
+        selectedIndex = idx;
+        fillActive(JSON.parse(li.dataset.payload));
+      }
       renderList();
-      fillActive(JSON.parse(li.dataset.payload));
     });
     ul.appendChild(li);
   });
@@ -192,7 +216,9 @@ async function loadAdminUnits() {
         },
       });
       if (results && results[0] && results[0].result && results[0].result.options) {
-        return results[0].result.options.filter(u => u.value && u.value !== "");
+        const units = results[0].result.options.filter(u => u.value && u.value !== "");
+        console.log("[Admin Units]", units);
+        return units;
       }
     }
   } catch (e) {
@@ -229,17 +255,20 @@ async function refreshQuestions() {
   loadErr.style.display = "none";
   if (!state.subjectId) {
     state.questions = [];
+    selectedIndices.clear();
     renderList();
     return;
   }
   try {
     state.questions = await loadQuestions();
     selectedIndex = 0;
+    selectedIndices.clear();
     renderList();
   } catch (e) {
     loadErr.textContent = e instanceof Error ? e.message : String(e);
     loadErr.style.display = "block";
     state.questions = [];
+    selectedIndices.clear();
     renderList();
   }
 }
@@ -341,6 +370,73 @@ async function init() {
   document.getElementById("openBrowserBtn").addEventListener("click", async () => {
     const url = chrome.runtime.getURL("browser.html");
     await chrome.tabs.create({ url });
+  });
+
+  document.getElementById("selectAllBtn").addEventListener("click", () => {
+    const items = filteredQuestions();
+    if (selectedIndices.size === items.length) {
+      // Unselect all if all are selected
+      selectedIndices.clear();
+    } else {
+      // Select all
+      for (let i = 0; i < items.length; i++) {
+        selectedIndices.add(i);
+      }
+    }
+    renderList();
+  });
+
+  document.getElementById("clearSelectionBtn").addEventListener("click", () => {
+    selectedIndices.clear();
+    renderList();
+  });
+
+  document.getElementById("fillSelectedBtn").addEventListener("click", async () => {
+    const items = filteredQuestions();
+    if (selectedIndices.size === 0) {
+      document.getElementById("status").textContent = "هیچ پرسیارێک هەڵنەبژێراوە.";
+      document.getElementById("status").style.color = "#fca5a5";
+      return;
+    }
+
+    const status = document.getElementById("status");
+    const indices = Array.from(selectedIndices).sort((a, b) => a - b);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < indices.length; i++) {
+      const idx = indices[i];
+      const q = items[idx];
+      status.textContent = `بارکردن... ${i + 1}/${indices.length}`;
+      status.style.color = "#fbbf24";
+
+      try {
+        await fillActive({
+          questionText: q.questionText,
+          options: q.options || [],
+          correctAnswer: q.correctAnswer || "",
+          unitId: q.unitId || q.unitId2 || undefined,
+          unitNumber: q.unitNumber || q.unitNumber2 || undefined,
+          unitNameKu: q.unitNameKu || undefined,
+        });
+        successCount++;
+
+        // Wait between fills to avoid overwhelming the page
+        if (i < indices.length - 1) {
+          await new Promise(r => setTimeout(r, 500));
+        }
+      } catch (e) {
+        failCount++;
+        console.error(`Failed to fill question #${q.questionNumber}:`, e);
+      }
+    }
+
+    status.textContent = `تەواو! ${successCount} سەرکەوتوو، ${failCount} سەرنەکەوتوو`;
+    status.style.color = failCount > 0 ? "#fbbf24" : "#86efac";
+
+    // Clear selection after filling
+    selectedIndices.clear();
+    renderList();
   });
 
   document.getElementById("searchInput").addEventListener("input", renderList);

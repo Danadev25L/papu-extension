@@ -105,6 +105,15 @@ input[type="file"] {
   max-height: 220px;
   overflow-y: auto;
 }
+.list-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.list-actions .btn {
+  margin: 0;
+  flex: 1;
+}
 .muted {
   margin: 0;
   font-size: 12px;
@@ -123,6 +132,14 @@ input[type="file"] {
   border: 1px solid #334155;
   cursor: pointer;
   text-align: right;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.q-checkbox {
+  margin: 0;
+  flex-shrink: 0;
+  cursor: pointer;
 }
 .q-item:hover,
 .q-item.selected {
