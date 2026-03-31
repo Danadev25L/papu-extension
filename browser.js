@@ -19,17 +19,27 @@ const EXAM_PERIODS = [
   { value: "second_term", label: "قۆناغی دووەم" },
 ];
 
+const DIFFICULTY_LEVELS = [
+  { value: "", label: "هەموو قەبارەیەک" },
+  { value: "0.1", label: "زۆر ئاسان" },
+  { value: "0.3", label: "ئاسان" },
+  { value: "0.5", label: "ناوەندی" },
+  { value: "0.7", label: "گران" },
+  { value: "1.0", label: "زۆر گران" }
+];
+
 let state = {
   subjects: [],
   questions: [],
   subjectId: "",
   examYear: "",
   examPeriod: "",
-  unitId: "",
-  adminUnitId: "",
+  unitId: "", // Our unit from API (for filtering)
+  adminUnitId: "", // Admin unit from admin panel (for uploading)
+  adminTermId: "", // Admin term from admin panel (for uploading)
   selectedQuestions: new Set(), // Track selected question IDs for bulk create
   questionImages: [], // Store uploaded question image URLs
-  choiceImages: {} // Store uploaded choice image URLs: {0: url, 1: url, ...}
+  choiceImages: {}, // Store uploaded choice image URLs: {0: url, 1: url, ...}
 };
 
 // Track filled question temporarily (for green flash effect)
@@ -132,11 +142,17 @@ function escapeHtml(s) {
 }
 
 function filteredQuestions() {
+  let results = state.questions;
+
+  // Filter by search text
   const q = document.getElementById("searchInput").value.trim().toLowerCase();
-  if (!q) return state.questions;
-  return state.questions.filter((item) =>
-    (item.questionText || "").toLowerCase().includes(q)
-  );
+  if (q) {
+    results = results.filter((item) =>
+      (item.questionText || "").toLowerCase().includes(q)
+    );
+  }
+
+  return results;
 }
 
 async function fillActive(payload, cardElement) {
@@ -163,6 +179,8 @@ async function fillActive(payload, cardElement) {
     const enrichedPayload = {
       ...payload,
       unitId: unitIdForSave, // Use admin unit ID for saving
+      difficulty: payload.difficulty || undefined,
+      termId: payload.termId || state.adminTermId || undefined,
       questionImages: (payload.questionImages && payload.questionImages.length > 0)
         ? payload.questionImages
         : state.questionImages,
@@ -241,11 +259,18 @@ function renderQuestions() {
     const hasQuestionImages = (q.questionImages?.length ?? 0) > 0;
     const hasChoiceImages = Object.keys(q.choiceImages ?? {}).length > 0;
 
+    // Get difficulty label
+    const difficultyLabels = {0.1: "زۆر ئاسان", 0.3: "ئاسان", 0.5: "ناوەندی", 0.7: "گران", 1.0: "زۆر گران"};
+    const difficultyLabel = q.difficulty !== undefined ? difficultyLabels[q.difficulty] || "" : "";
+    const difficultyClass = q.difficulty >= 0.7 ? "q-difficulty-hard" :
+                          q.difficulty >= 0.5 ? "q-difficulty-medium" : "q-difficulty-easy";
+
     card.innerHTML = `
       <input type="checkbox" class="q-checkbox" data-id="${q.id}" ${isSelected ? "checked" : ""}>
       <div class="q-header">
         <span class="q-number">#${q.questionNumber}</span>
         <div class="q-meta">
+          ${difficultyLabel ? `<span class="q-difficulty ${difficultyClass}">${escapeHtml(difficultyLabel)}</span>` : ""}
           ${unitLabel ? `<span class="q-unit">${escapeHtml(unitLabel)}</span>` : ""}
           ${yearLabel ? `<span class="q-year">${yearLabel}</span>` : ""}
           ${hasQuestionImages ? `<span class="q-images">🖼️ ${q.questionImages?.length || 0}</span>` : ""}
@@ -311,6 +336,8 @@ function renderQuestions() {
         options: q.options || [],
         correctAnswer: q.correctAnswer || "",
         unitId: state.unitId || undefined,
+        difficulty: q.difficulty,
+        termId: q.termId || state.adminTermId || undefined,
         questionImages: q.questionImages || [],
         choiceImages: q.choiceImages || {}
       }, card);
@@ -520,6 +547,8 @@ async function bulkCreate() {
           options: q.options || [],
           correctAnswer: q.correctAnswer || "",
           unitId: adminUnitId, // Use admin unit ID for saving
+          difficulty: q.difficulty,
+          termId: state.adminTermId || q.termId || undefined,
           questionImages: q.questionImages || [],
           choiceImages: q.choiceImages || {}
         }
@@ -762,6 +791,92 @@ async function loadUnitsFromForm() {
   return [];
 }
 
+/**
+ * Load terms from the admin panel's TermId dropdown
+ */
+async function loadTermsFromForm() {
+  try {
+    const tabs = await chrome.tabs.query({});
+    const adminTab = tabs.find(t =>
+      t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
+    );
+
+    if (adminTab) {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: adminTab.id },
+        func: () => {
+          // Try multiple selectors for term dropdown
+          const termSelect =
+            document.querySelector('select[name="Question.TermId"]') ||
+            document.querySelector('select[name="TermId"]') ||
+            document.querySelector('#TermId') ||
+            document.querySelector('select[id*="term" i]') ||
+            document.querySelector('select[name*="term" i]');
+
+          if (!termSelect) {
+            console.log("[loadTermsFromForm] Term dropdown not found");
+            return [];
+          }
+
+          console.log("[loadTermsFromForm] Found term dropdown:", termSelect.name, termSelect.id);
+
+          return Array.from(termSelect.options).map(opt => ({
+            value: opt.value,
+            label: opt.textContent?.trim() || opt.value || "Unknown"
+          })).filter(t => t.value && t.value !== "");
+        },
+      });
+      if (results && results[0] && results[0].result) {
+        console.log("[loadTermsFromForm] Loaded terms:", results[0].result);
+        return results[0].result;
+      }
+    }
+  } catch (e) {
+    console.log("Could not fetch terms from form:", e);
+  }
+  return [];
+}
+
+/**
+ * Assign random difficulty to questions
+ * - Approximately 5 hard questions (0.7 or 1.0) per subject
+ * - Rest are easy/medium (0.1, 0.3, or 0.5)
+ */
+function assignDifficultyToQuestions(questions) {
+  const bySubject = {};
+  questions.forEach(q => {
+    const key = q.subjectId || "unknown";
+    if (!bySubject[key]) bySubject[key] = [];
+    bySubject[key].push(q);
+  });
+
+  const difficulties = [0.1, 0.3, 0.5, 0.7, 1.0];
+
+  Object.keys(bySubject).forEach(subjectId => {
+    const subjectQuestions = bySubject[subjectId];
+    // Calculate hard count: min(5, 1/3 of questions)
+    const hardCount = Math.min(5, Math.floor(subjectQuestions.length / 3));
+
+    // Shuffle questions for random assignment
+    const shuffled = [...subjectQuestions].sort(() => Math.random() - 0.5);
+
+    // Assign hard difficulty to first batch
+    shuffled.slice(0, hardCount).forEach(q => {
+      q.difficulty = Math.random() > 0.5 ? 0.7 : 1.0;
+    });
+
+    // Assign easy/medium to rest (0.1, 0.3, or 0.5)
+    shuffled.slice(hardCount).forEach(q => {
+      q.difficulty = difficulties[Math.floor(Math.random() * 3)];
+    });
+  });
+
+  console.log("[assignDifficultyToQuestions] Assigned difficulties:",
+    questions.map(q => ({ id: q.id, difficulty: q.difficulty }))
+  );
+  return questions;
+}
+
 // Load units from API (our units)
 async function loadUnitsFromApi(subjectId) {
   if (!subjectId) return [];
@@ -774,6 +889,7 @@ async function loadUnitsFromApi(subjectId) {
   }));
 }
 
+// Load terms from API (our terms)
 async function loadQuestions() {
   const params = new URLSearchParams();
   if (state.examYear && state.examYear !== ALL) params.set("examYear", state.examYear);
@@ -791,6 +907,9 @@ async function loadQuestions() {
       q.unit_id === state.unitId
     );
   }
+
+  // Assign random difficulty to questions if they don't have it
+  questions = assignDifficultyToQuestions(questions);
 
   // Log questions with images
   const withImages = questions.filter(q => (q.questionImages?.length ?? 0) > 0);
@@ -897,6 +1016,29 @@ async function init() {
     document.getElementById("adminUnitFilterWrapper").style.display = "flex";
   }
 
+  // Load admin terms from form (for uploading, like admin units)
+  try {
+    const adminTerms = await loadTermsFromForm();
+    if (adminTerms.length > 0) {
+      fillSelect(
+        document.getElementById("filterAdminTerm"),
+        [{ value: "", label: "هەڵبژێرە خول" }, ...adminTerms],
+        false
+      );
+    }
+  } catch (e) {
+    console.log("Failed to load admin terms from form:", e);
+  }
+  // Always show admin term filter (like admin units)
+  document.getElementById("adminTermFilterWrapper").style.display = "flex";
+
+  // Initialize admin term filter (will be populated from admin panel form)
+  fillSelect(
+    document.getElementById("filterAdminTerm"),
+    [{ value: "", label: "هەڵبژێرە خول" }],
+    false
+  );
+
   // Always show unit filters
   document.getElementById("unitFilterWrapper").style.display = "flex";
 
@@ -927,6 +1069,35 @@ async function init() {
   document.getElementById("filterUnit").addEventListener("change", async (e) => {
     state.unitId = e.target.value;
     refreshQuestions();
+  });
+
+  // Admin term filter - for uploading (syncs to admin panel form)
+  document.getElementById("filterAdminTerm").addEventListener("change", async (e) => {
+    state.adminTermId = e.target.value;
+    // Sync to admin.pepu.krd form
+    if (e.target.value) {
+      try {
+        const tabs = await chrome.tabs.query({});
+        const adminTab = tabs.find(t =>
+          t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
+        );
+        if (adminTab) {
+          await chrome.scripting.executeScript({
+            target: { tabId: adminTab.id },
+            func: (termId) => {
+              const termSelect = document.querySelector('select[name="Question.TermId"]');
+              if (termSelect) {
+                termSelect.value = termId;
+                termSelect.dispatchEvent(new Event("change", { bubbles: true }));
+              }
+            },
+            args: [e.target.value]
+          });
+        }
+      } catch (err) {
+        console.log("Failed to sync admin term:", err);
+      }
+    }
   });
 
   document.getElementById("filterAdminUnit").addEventListener("change", async (e) => {
@@ -978,6 +1149,25 @@ async function init() {
       fillSelect(
         document.getElementById("filterAdminUnit"),
         [{ value: "", label: "هەڵبژێرە بەند" }, ...units],
+        false
+      );
+      btn.textContent = "✓ Done!";
+      setTimeout(() => { btn.textContent = originalText; }, 1500);
+    } catch (e) {
+      btn.textContent = "Error!";
+      setTimeout(() => { btn.textContent = originalText; }, 1500);
+    }
+  });
+
+  document.getElementById("refreshTermsBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("refreshTermsBtn");
+    const originalText = btn.textContent;
+    btn.textContent = "⏳...";
+    try {
+      const terms = await loadTermsFromForm();
+      fillSelect(
+        document.getElementById("filterAdminTerm"),
+        [{ value: "", label: "هەڵبژێرە خول" }, ...terms],
         false
       );
       btn.textContent = "✓ Done!";

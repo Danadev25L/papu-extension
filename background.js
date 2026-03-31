@@ -13,6 +13,8 @@ chrome.action.onClicked.addListener(async (tab) => {
  * - questionImages: Array of image URLs for the question
  * - choiceImages: {0: url, 1: url, ...} mapping choice index to image URL
  * - unitId: Unit selection
+ * - difficulty: Difficulty level (0.1, 0.3, 0.5, 0.7, 1.0)
+ * - termId: Term ID for the term dropdown
  */
 async function papuInjectedFill(payload, mapping) {
   console.log('[Injected] papuInjectedFill called!', 'payload keys:', Object.keys(payload || {}), 'mapping:', mapping);
@@ -122,6 +124,28 @@ async function papuInjectedFill(payload, mapping) {
     if (unitSelect) {
       setNativeValue(unitSelect, payload.unitId);
       console.log("[Fill] Set unit to:", payload.unitId);
+    }
+  }
+
+  // Set difficulty radio button if provided
+  if (payload.difficulty !== undefined && payload.difficulty !== "") {
+    const radios = document.querySelectorAll('input[name="Question.Difficulty"]');
+    for (const radio of radios) {
+      if (radio.value === String(payload.difficulty)) {
+        radio.checked = true;
+        radio.dispatchEvent(new Event("change", { bubbles: true }));
+        console.log("[Fill] Set difficulty to:", payload.difficulty);
+        break;
+      }
+    }
+  }
+
+  // Set term dropdown if provided
+  if (payload.termId) {
+    const termSelect = document.querySelector('select[name="Question.TermId"]');
+    if (termSelect) {
+      setNativeValue(termSelect, payload.termId);
+      console.log("[Fill] Set termId to:", payload.termId);
     }
   }
 
