@@ -155,10 +155,14 @@ async function fillActive(payload, cardElement) {
       return { ok: false, error: "Tab not found" };
     }
 
+    // Use adminUnitId for saving (from dropdown), unitId is just for filtering
+    const unitIdForSave = state.adminUnitId || payload.unitId || undefined;
+
     // Include current state's choice images
     // Use payload.choiceImages (from question) first, fallback to state (user uploaded)
     const enrichedPayload = {
       ...payload,
+      unitId: unitIdForSave, // Use admin unit ID for saving
       questionImages: (payload.questionImages && payload.questionImages.length > 0)
         ? payload.questionImages
         : state.questionImages,
@@ -435,6 +439,45 @@ async function bulkCreate() {
 
   console.log("[Bulk Create] Target tab:", targetTab.url);
 
+  // === Get admin unit ID (for saving to database) ===
+  // Use selected admin unit, or get current value from form
+  let adminUnitId = state.adminUnitId;
+  if (!adminUnitId || adminUnitId === "") {
+    console.log("[Bulk Create] No admin unit selected, getting from form...");
+    const unitResult = await chrome.scripting.executeScript({
+      target: { tabId: targetTab.id },
+      func: () => {
+        const unitSelect = document.querySelector('select[name="Question.UnitId"]');
+        if (!unitSelect) return null;
+        // Get current value or first valid option
+        const currentValue = unitSelect.value;
+        if (currentValue && currentValue !== "" && parseInt(currentValue) > 0) {
+          return currentValue;
+        }
+        // Get first valid unit option
+        const firstOption = Array.from(unitSelect.options).find(opt =>
+          opt.value && opt.value !== "" && parseInt(opt.value) > 0
+        );
+        return firstOption?.value || null;
+      }
+    });
+    if (unitResult?.[0]?.result) {
+      adminUnitId = unitResult[0].result;
+      console.log("[Bulk Create] Using admin unit from form:", adminUnitId);
+    }
+  }
+
+  // Validate we have an admin unit ID (required for saving)
+  if (!adminUnitId || adminUnitId === "" || parseInt(adminUnitId) < 1) {
+    bulkProgress.style.display = "none";
+    bulkCreateInProgress = false;
+    showToast("❌ یەکەیەکی دروست هەڵبژێرە! (Admin Unit required)", "error");
+    return;
+  }
+
+  console.log("[Bulk Create] Using adminUnitId:", adminUnitId, "for saving");
+  console.log("[Bulk Create] Our unitId (for filter):", state.unitId);
+
   for (let i = 0; i < selectedQuestions.length; i++) {
     const q = selectedQuestions[i];
     const card = document.querySelector(`.q-checkbox[data-id="${q.id}"]`)?.closest(".q-card");
@@ -452,22 +495,20 @@ async function bulkCreate() {
       console.log("[Bulk Create] Question text:", q.questionText?.slice(0, 50));
       console.log("[Bulk Create] Options:", q.options);
 
-      // FIRST: Set the unit dropdown (if a unit is selected)
-      if (state.unitId) {
-        await chrome.scripting.executeScript({
-          target: { tabId: targetTab.id },
-          func: (unitId) => {
-            const unitSelect = document.querySelector('select[name="Question.UnitId"], select[name="UnitId"], #UnitId');
-            if (unitSelect) {
-              unitSelect.value = unitId;
-              unitSelect.dispatchEvent(new Event("change", { bubbles: true }));
-              console.log("[Bulk Create] Set unit to:", unitId);
-            }
-          },
-          args: [state.unitId]
-        });
-        await new Promise(resolve => setTimeout(resolve, 300));
-      }
+      // FIRST: Set the admin unit dropdown (required for saving)
+      await chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        func: (unitId) => {
+          const unitSelect = document.querySelector('select[name="Question.UnitId"], select[name="UnitId"], #UnitId');
+          if (unitSelect) {
+            unitSelect.value = unitId;
+            unitSelect.dispatchEvent(new Event("change", { bubbles: true }));
+            console.log("[Bulk Create] Set admin unit to:", unitId);
+          }
+        },
+        args: [adminUnitId]
+      });
+      await new Promise(resolve => setTimeout(resolve, 300));
 
       // THEN: Fill the form using background script
       const fillResult = await chrome.runtime.sendMessage({
@@ -478,7 +519,7 @@ async function bulkCreate() {
           questionText: q.questionText,
           options: q.options || [],
           correctAnswer: q.correctAnswer || "",
-          unitId: state.unitId || undefined,
+          unitId: adminUnitId, // Use admin unit ID for saving
           questionImages: q.questionImages || [],
           choiceImages: q.choiceImages || {}
         }
@@ -499,6 +540,38 @@ async function bulkCreate() {
 
       // Wait for form to be filled
       await new Promise(resolve => setTimeout(resolve, 800));
+
+      // === Verify admin unit is set before submitting ===
+      const unitCheck = await chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        func: (expectedUnit) => {
+          const unitSelect = document.querySelector('select[name="Question.UnitId"], select[name="UnitId"], #UnitId');
+          if (!unitSelect) return { ok: false, error: "Unit dropdown not found" };
+          const currentValue = unitSelect.value;
+          const isValid = currentValue && currentValue !== "" && parseInt(currentValue) > 0;
+          if (!isValid) {
+            // Try to set it again
+            unitSelect.value = expectedUnit;
+            unitSelect.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          return {
+            ok: currentValue && currentValue !== "" && parseInt(currentValue) > 0,
+            currentValue,
+            expectedUnit
+          };
+        },
+        args: [adminUnitId]
+      });
+
+      console.log("[Bulk Create] Admin unit check:", unitCheck?.[0]?.result);
+      if (!unitCheck?.[0]?.result?.ok) {
+        console.error("[Bulk Create] Admin unit validation failed!");
+        showToast(`❌ یەکەی (Unit) دروست نییە`, "error");
+        failCount++;
+        card?.classList.remove("bulk-processing");
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
 
       // Click the save button using injected script - try multiple methods
       console.log("[Bulk Create] Attempting to submit form...");
@@ -657,15 +730,29 @@ async function loadUnitsFromForm() {
       const results = await chrome.scripting.executeScript({
         target: { tabId: adminTab.id },
         func: () => {
-          const unitSelect = document.querySelector('select[name="Question.UnitId"]');
-          if (!unitSelect) return [];
+          // Try multiple selectors to find the unit dropdown
+          const unitSelect =
+            document.querySelector('select[name="Question.UnitId"]') ||
+            document.querySelector('select[name="UnitId"]') ||
+            document.querySelector('#UnitId') ||
+            document.querySelector('select[id*="unit" i]') ||
+            document.querySelector('select[name*="unit" i]');
+
+          if (!unitSelect) {
+            console.log("[loadUnitsFromForm] Unit dropdown not found");
+            return [];
+          }
+
+          console.log("[loadUnitsFromForm] Found unit dropdown:", unitSelect.name, unitSelect.id);
+
           return Array.from(unitSelect.options).map(opt => ({
             value: opt.value,
-            label: opt.textContent || opt.value || "Unknown"
-          })).filter(u => u.value && u.value !== "");
+            label: opt.textContent?.trim() || opt.value || "Unknown"
+          })).filter(u => u.value && u.value !== "" && parseInt(u.value) > 0);
         },
       });
       if (results && results[0] && results[0].result) {
+        console.log("[loadUnitsFromForm] Loaded units:", results[0].result);
         return results[0].result;
       }
     }
