@@ -1,400 +1,81 @@
+// Papu extension - Background service worker
+
+console.log('[Background] Script loading...');
+
 // Open browser page when extension icon is clicked
 chrome.action.onClicked.addListener(async (tab) => {
+  console.log('[Background] Icon clicked, opening browser.html');
   const url = chrome.runtime.getURL("browser.html");
   await chrome.tabs.create({ url });
 });
 
-/**
- * Injected into the active tab. Fills form and returns diagnostic.
- * Must be self-contained — no external refs (findEl inlined).
- *
- * Supports:
- * - questionText, options, correctAnswer (existing fields)
- * - questionImages: Array of image URLs for the question
- * - choiceImages: {0: url, 1: url, ...} mapping choice index to image URL
- * - unitId: Unit selection
- * - difficulty: Difficulty level (0.1, 0.3, 0.5, 0.7, 1.0)
- * - termId: Term ID for the term dropdown
- */
-async function papuInjectedFill(payload, mapping) {
-  console.log('[Injected] papuInjectedFill called!', 'payload keys:', Object.keys(payload || {}), 'mapping:', mapping);
+// Message handler
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  console.log('[Background] Message received:', msg?.type);
 
-  function findEl(selStr) {
-    if (!selStr || typeof selStr !== "string") return null;
-    const parts = String(selStr).split(",").map((s) => s.trim()).filter(Boolean);
-    for (const sel of parts) {
+  // PING for connection test
+  if (msg?.type === "PING") {
+    console.log('[Background] PING -> PONG');
+    sendResponse({ pong: true });
+    return true;
+  }
+
+  // Fill specific tab
+  if (msg?.type === "FILL_SPECIFIC_TAB") {
+    (async () => {
       try {
-        const el = document.querySelector(sel);
-        if (el) return el;
-      } catch (_) {}
-    }
-    return null;
-  }
-  const found = { question: false, options: [], correct: false };
-  function setNativeValue(el, value) {
-    if (!el || value === undefined || value === null) return false;
-    const v = String(value);
-    el.focus?.();
-    const tag = (el.tagName || "").toUpperCase();
-    if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT") {
-      const proto = tag === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : tag === "SELECT" ? window.HTMLSelectElement.prototype : window.HTMLInputElement.prototype;
-      const desc = Object.getOwnPropertyDescriptor(proto, "value");
-      if (desc && desc.set) desc.set.call(el, v);
-      else el.value = v;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      el.dispatchEvent(new Event("blur", { bubbles: true }));
-      return true;
-    }
-    if (el.isContentEditable || el.getAttribute?.("contenteditable") === "true") {
-      el.textContent = v;
-      el.innerText = v;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      return true;
-    }
-    return false;
-  }
-
-  function stripQuestionNumber(s) {
-    if (!s || typeof s !== "string") return s;
-    return s
-      // Remove Arabic/Persian/Kurdish numerals at start (٠١٢٣٤٥٦٧٨٩)
-      .replace(/^[٠-٩ٔ]+[\.\.\s\s]*/, "")
-      // Remove English numerals at start (0-9)
-      .replace(/^[0-9]+[\.\.\s\s]*/, "")
-      .trim();
-  }
-
-  const qSel = mapping.questionSelector;
-  console.log('[Fill] questionSelector:', qSel);
-  console.log('[Fill] questionText:', payload.questionText?.slice(0, 50));
-  if (qSel && payload.questionText) {
-    const el = findEl(qSel);
-    console.log('[Fill] Question element found:', !!el, el?.tagName, el?.name);
-    const cleanQuestionText = stripQuestionNumber(payload.questionText);
-    found.question = setNativeValue(el, cleanQuestionText);
-    console.log('[Fill] Question set successfully:', found.question);
-
-    // Handle question images - fetch and drop like choice images
-    if (payload.questionImages && Array.isArray(payload.questionImages) && payload.questionImages.length > 0) {
-      if (el && el.tagName === "TEXTAREA") {
-        const imageUrl = payload.questionImages[0];
-        let absoluteUrl = imageUrl;
-        if (imageUrl.startsWith('/uploads/')) {
-          absoluteUrl = 'https://pepumangment-backend.danabestun.dev' + imageUrl;
+        const tabId = msg.tabId;
+        if (!tabId) {
+          sendResponse({ ok: false, error: "No tab ID" });
+          return;
         }
 
-        console.log('[Fill] Question image - fetching from:', absoluteUrl);
+        const tab = await chrome.tabs.get(tabId);
+        if (!tab?.url) {
+          sendResponse({ ok: false, error: "Tab not found" });
+          return;
+        }
 
+        // Get mapping from storage
+        let hostname = "";
         try {
-          // Fetch the image and convert to blob
-          const imageResponse = await fetch(absoluteUrl);
-          if (!imageResponse.ok) {
-            console.log('[Fill] Failed to fetch question image:', imageResponse.status);
-          } else {
-            const blob = await imageResponse.blob();
-            const file = new File([blob], `question_image.jpg`, { type: blob.type || 'image/jpeg' });
-
-            // Create DataTransfer and dispatch drop event
-            const dataTransfer = new DataTransfer();
-            dataTransfer.items.add(file);
-
-            const dropEvent = new DragEvent('drop', {
-              bubbles: true,
-              cancelable: true,
-              dataTransfer: dataTransfer
-            });
-
-            el.dispatchEvent(dropEvent);
-            console.log('[Fill] Question image - dispatched drop event');
-            await new Promise(r => setTimeout(r, 1500));
-          }
-        } catch (err) {
-          console.error('[Fill] Failed to set question image:', err);
-        }
-      }
-    }
-  } else {
-    console.log('[Fill] Skipping question - qSel:', !!qSel, 'questionText:', !!payload.questionText);
-  }
-
-  // Set unit dropdown - use unitNumber as index (unit 2 = 2nd option)
-  const unitSelect = document.querySelector('select[name="Question.UnitId"], select[name="UnitId"], #UnitId');
-  console.log("[Fill] Unit dropdown found:", !!unitSelect, "payload.unitNumber:", payload.unitNumber);
-
-  if (unitSelect && payload.unitNumber) {
-    const allOptions = Array.from(unitSelect.options);
-    // Filter out empty/placeholder options
-    const validOptions = allOptions.filter(opt => opt.value && opt.value !== "");
-    const unitIndex = parseInt(payload.unitNumber, 10);
-
-    console.log("[Fill] Total options:", allOptions.length, "Valid options:", validOptions.length, "Unit index:", unitIndex);
-
-    // Select by index - unit 2 = 2nd valid option
-    if (unitIndex > 0 && unitIndex <= validOptions.length) {
-      const targetOption = validOptions[unitIndex - 1]; // -1 because array is 0-indexed
-      if (targetOption) {
-        setNativeValue(unitSelect, targetOption.value);
-        console.log("[Fill] Set unit by index - unit", unitIndex, "= option value:", targetOption.value, "text:", targetOption.textContent?.slice(0, 30));
-      }
-    }
-  }
-
-  // Set difficulty radio button if provided
-  if (payload.difficulty !== undefined && payload.difficulty !== "") {
-    const radios = document.querySelectorAll('input[name="Question.Difficulty"]');
-    for (const radio of radios) {
-      if (radio.value === String(payload.difficulty)) {
-        radio.checked = true;
-        radio.dispatchEvent(new Event("change", { bubbles: true }));
-        console.log("[Fill] Set difficulty to:", payload.difficulty);
-        break;
-      }
-    }
-  }
-
-  // Set term dropdown if provided
-  if (payload.termId) {
-    const termSelect = document.querySelector('select[name="Question.TermId"]');
-    if (termSelect) {
-      setNativeValue(termSelect, payload.termId);
-      console.log("[Fill] Set termId to:", payload.termId);
-    }
-  }
-
-  function stripOptionLabel(s) {
-    if (!s || typeof s !== "string") return s;
-    return s
-      .replace(/^[A-Da-d][).:\s]+/, "")
-      .replace(/^تەواوکەری بەیاریدە\s*/i, "")
-      .trim();
-  }
-  // Get choice textareas - filter to only those with "Choices" in name
-  const choiceTextareas = Array.from(document.querySelectorAll("textarea"))
-    .filter(t => (t.name || "").includes("Choices"));
-
-  console.log('[Fill] Found choice textareas:', choiceTextareas.length, choiceTextareas.map(t => t.name));
-  console.log('[Fill] Options to fill:', payload.options?.length);
-
-  (payload.options || []).forEach((text, i) => {
-    const cleanText = stripOptionLabel(text);
-    const el = choiceTextareas[i];
-    const result = setNativeValue(el, cleanText);
-    found.options.push(result);
-    console.log('[Fill] Option', i, 'element:', el?.name, 'result:', result);
-  });
-
-  // Debug: log question data to see what unit fields exist
-  console.log('[Fill Debug] Full payload keys:', Object.keys(payload));
-  console.log('[Fill Debug] payload:', JSON.stringify(payload, null, 2));
-
-  // Handle choice images - fetch image and simulate drop/paste event
-  console.log('[Fill] choiceImages payload:', payload.choiceImages, 'keys:', Object.keys(payload.choiceImages || {}));
-  if (payload.choiceImages && typeof payload.choiceImages === 'object' && Object.keys(payload.choiceImages).length > 0) {
-    for (const [idx, imageUrl] of Object.entries(payload.choiceImages)) {
-      const i = parseInt(idx, 10);
-      const targetTextarea = choiceTextareas[i];
-
-      if (!targetTextarea) {
-        console.log(`[Fill] No textarea found for choice ${i}`);
-        continue;
-      }
-
-      try {
-        // Convert relative URLs to absolute - use backend URL
-        let absoluteUrl = imageUrl;
-        if (imageUrl.startsWith('/uploads/')) {
-          absoluteUrl = 'https://pepumangment-backend.danabestun.dev' + imageUrl;
+          hostname = new URL(tab.url).hostname;
+        } catch {
+          sendResponse({ ok: false, error: "Invalid URL" });
+          return;
         }
 
-        console.log(`[Fill] Choice ${i} - fetching image from:`, absoluteUrl);
+        const data = await chrome.storage.local.get(["papuExt_mapping"]);
+        const mapping =
+          data.papuExt_mapping?.[hostname] ||
+          data.papuExt_mapping?.[hostname.replace(/^www\./, "")] ||
+          data.papuExt_mapping?.["www." + hostname];
 
-        // Fetch the image and convert to blob
-        const imageResponse = await fetch(absoluteUrl);
-        if (!imageResponse.ok) {
-          console.log(`[Fill] Failed to fetch image:`, imageResponse.status);
-          continue;
+        if (!mapping?.questionSelector) {
+          sendResponse({ ok: false, error: "No mapping for " + hostname });
+          return;
         }
-        const blob = await imageResponse.blob();
-        const file = new File([blob], `choice_${i}.jpg`, { type: 'image/jpeg' });
 
-        // Create a DataTransfer object with the file (simulates drag & drop or paste)
-        const dataTransfer = new DataTransfer();
-        dataTransfer.items.add(file);
-
-        // Create and dispatch drop event
-        const dropEvent = new DragEvent('drop', {
-          bubbles: true,
-          cancelable: true,
-          dataTransfer: dataTransfer
+        // Execute fill script
+        const payload = msg.payload || {};
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          func: papuInjectedFill,
+          args: [payload, mapping],
         });
 
-        targetTextarea.dispatchEvent(dropEvent);
-        console.log(`[Fill] Choice ${i} - dispatched drop event with image file`);
-
-        // Wait for the upload to process
-        await new Promise(r => setTimeout(r, 1500));
-
-      } catch (err) {
-        console.error(`[Fill] Failed to set choice ${i} image:`, err);
+        const diagnostics = (results || []).map((x) => x.result).filter(Boolean);
+        const diag = diagnostics[0];
+        sendResponse({ ok: true, result: diag });
+      } catch (e) {
+        console.error('[Background] Fill error:', e);
+        sendResponse({ ok: false, error: String(e) });
       }
-    }
+    })();
+    return true;
   }
 
-  const checkboxSels = mapping.correctAnswerCheckboxSelectors;
-  const fallbackCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"][name*="IsCorrect"]'));
-  if (payload.correctAnswer && ((Array.isArray(checkboxSels) && checkboxSels.length > 0) || fallbackCheckboxes.length > 0)) {
-    const opts = (payload.options || []).map(stripOptionLabel);
-    const norm = (s) => String(s || "").trim().replace(/\s+/g, " ");
-    const want = norm(stripOptionLabel(payload.correctAnswer));
-    let idx = -1;
-    for (let i = 0; i < opts.length; i++) {
-      if (norm(opts[i]) === want) {
-        idx = i;
-        break;
-      }
-    }
-    if (idx < 0 && want) {
-      for (let i = 0; i < opts.length; i++) {
-        const o = norm(opts[i]);
-        if (o && (o.includes(want) || want.includes(o))) {
-          idx = i;
-          break;
-        }
-      }
-    }
-    function setCheckbox(el, on) {
-      if (!el || el.type !== "checkbox") return false;
-      const v = !!on;
-      el.focus?.();
-      el.checked = v;
-      el.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      return true;
-    }
-    const checkboxes = fallbackCheckboxes.length >= 4 ? fallbackCheckboxes : null;
-    let okCorrect = false;
-    for (let i = 0; i < 4; i++) {
-      let el = Array.isArray(checkboxSels) && checkboxSels[i] ? findEl(checkboxSels[i]) : null;
-      if (!el && checkboxes && checkboxes[i]) el = checkboxes[i];
-      const on = idx >= 0 && i === idx;
-      if (el && setCheckbox(el, on) && on) okCorrect = true;
-    }
-    found.correct = okCorrect;
-  } else {
-    const caSel = mapping.correctAnswerSelector;
-    if (caSel && payload.correctAnswer) {
-      const el = findEl(caSel);
-      found.correct = setNativeValue(el, payload.correctAnswer);
-    }
-  }
-
-  // Store image data for the admin panel to use
-  // The admin form can read these data attributes to populate image fields
-  const form = document.querySelector('form');
-  if (form) {
-    // Store question images as JSON
-    if (payload.questionImages && Array.isArray(payload.questionImages)) {
-      form.dataset.questionImages = JSON.stringify(payload.questionImages);
-      console.log("[Fill] Set question images:", payload.questionImages);
-    }
-
-    // Store choice images as JSON
-    if (payload.choiceImages && typeof payload.choiceImages === 'object') {
-      form.dataset.choiceImages = JSON.stringify(payload.choiceImages);
-      console.log("[Fill] Set choice images:", payload.choiceImages);
-    }
-
-    // Dispatch custom event for admin panel to listen for
-    form.dispatchEvent(new CustomEvent('papu-images-ready', {
-      detail: {
-        questionImages: payload.questionImages || [],
-        choiceImages: payload.choiceImages || {}
-      },
-      bubbles: true
-    }));
-  }
-
-  return found;
-}
-
-/** Runs in page context to detect form fields. Must be self-contained. */
-function papuDetectSelectors() {
-  function makeSelector(el) {
-    try {
-      if (el.id && /^[a-zA-Z_][\w-.:]*$/.test(el.id)) return "#" + (typeof CSS !== "undefined" && CSS.escape ? CSS.escape(el.id) : el.id);
-    } catch (_) {}
-    const tag = el.tagName.toLowerCase();
-    if (el.name) return tag + '[name="' + String(el.name).replace(/"/g, '\\"') + '"]';
-    if (el.placeholder) return tag + '[placeholder="' + String(el.placeholder).slice(0, 50).replace(/"/g, '\\"') + '"]';
-    const parent = el.parentElement;
-    if (parent) {
-      const siblings = Array.from(parent.children).filter((c) => c.tagName === el.tagName);
-      if (siblings.length > 1) {
-        const i = siblings.indexOf(el) + 1;
-        return tag + ":nth-of-type(" + i + ")";
-      }
-    }
-    return null;
-  }
-  const doc = document;
-  const fields = [];
-  const sel = "textarea, input[type=text], input[type=email], input[type=search], input:not([type]), input[type=''], [contenteditable=true]";
-  doc.querySelectorAll(sel).forEach((el) => {
-    if (el.offsetParent === null || el.hidden || el.disabled) return;
-    const rect = el.getBoundingClientRect();
-    if (rect.width < 5 || rect.height < 3) return;
-    try {
-      const s = makeSelector(el);
-      if (s && document.querySelectorAll(s).length === 1) {
-        fields.push({ selector: s, tag: el.tagName.toLowerCase(), y: rect.top + window.scrollY, height: rect.height });
-      } else if (el.name) {
-        const fallback = el.tagName.toLowerCase() + '[name="' + String(el.name).replace(/"/g, '\\"') + '"]';
-        if (document.querySelectorAll(fallback).length === 1) {
-          fields.push({ selector: fallback, tag: el.tagName.toLowerCase(), y: rect.top + window.scrollY, height: rect.height });
-        }
-      }
-    } catch (_) {}
-  });
-  fields.sort((a, b) => a.y - b.y);
-  const textareas = fields.filter((f) => f.tag === "textarea");
-  const question = textareas.length > 0 ? textareas.reduce((a, b) => (a.height >= b.height ? a : b)) : fields[0];
-  const others = fields.filter((f) => f !== question);
-  const options = others.slice(0, 6).map((f) => f.selector);
-  return {
-    questionSelector: question?.selector || "",
-    optionSelectors: options,
-    correctAnswerSelector: null,
-  };
-}
-
-function papuDebugFields() {
-  const out = [];
-  const sel = "textarea, input:not([type=hidden]):not([type=submit]):not([type=button]), select, [contenteditable=true]";
-  document.querySelectorAll(sel).forEach((el) => {
-    if (el.offsetParent === null && el.type !== "hidden") return;
-    const tag = el.tagName.toLowerCase();
-    const name = el.name || "";
-    const id = el.id || "";
-    const ph = (el.placeholder || "").slice(0, 30);
-    const ce = el.getAttribute?.("contenteditable") || "";
-    let s = "";
-    if (id && /^[a-zA-Z_][\w.-]*$/.test(id)) s = "#" + id;
-    else if (name) s = tag + '[name="' + String(name).replace(/"/g, '\\"') + '"]';
-    if (s && document.querySelectorAll(s).length === 1) {
-      out.push({ tag, name, id, placeholder: ph, contenteditable: ce, selector: s });
-    }
-  });
-  return JSON.stringify(out, null, 2);
-}
-
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  // Debug: Log all incoming messages
-  if (msg?.type === "FILL_SPECIFIC_TAB") {
-    console.log('[Background] FILL_SPECIFIC_TAB received, payload keys:', Object.keys(msg.payload || {}));
-    console.log('[Background] payload.choiceImages:', msg.payload?.choiceImages);
-  }
-
+  // Debug fields
   if (msg?.type === "DEBUG_FIELDS") {
     (async () => {
       try {
@@ -417,6 +98,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     })();
     return true;
   }
+
+  // Detect selectors
   if (msg?.type === "DETECT_SELECTORS") {
     (async () => {
       try {
@@ -424,7 +107,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const tabs = await chrome.tabs.query({});
         const tab = tabs.find((t) => t.url && new URL(t.url).hostname.toLowerCase() === host);
         if (!tab?.id) {
-          sendResponse({ ok: false, error: `No tab found for "${host}". Open the form page in a tab first.` });
+          sendResponse({ ok: false, error: "No tab found for \"" + host + "\"" });
           return;
         }
         const results = await chrome.scripting.executeScript({
@@ -434,271 +117,409 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const candidates = (results || []).map((x) => x.result).filter(Boolean);
         const r = candidates.find((m) => m?.questionSelector && m?.optionSelectors?.length) || candidates[0];
         if (!r?.questionSelector || !r?.optionSelectors?.length) {
-          sendResponse({ ok: false, error: "Could not find form fields. Make sure the form is visible (including inside iframes)." });
+          sendResponse({ ok: false, error: "Could not find form fields" });
           return;
         }
         sendResponse({ ok: true, mapping: r });
       } catch (e) {
-        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
+        sendResponse({ ok: false, error: String(e) });
       }
     })();
     return true;
   }
 
-  if (msg?.type === "FILL_SPECIFIC_TAB") {
-    (async () => {
-      try {
-        const tabId = msg.tabId;
-        console.log('[Background] FILL_SPECIFIC_TAB with tabId:', tabId);
-
-        if (!tabId) {
-          sendResponse({ ok: false, error: "No tab ID provided" });
-          return;
-        }
-
-        const tab = await chrome.tabs.get(tabId);
-        console.log('[Background] Found tab:', tab.id, tab.url);
-        if (!tab?.url) {
-          sendResponse({ ok: false, error: "Tab not found" });
-          return;
-        }
-
-        let hostname = "";
-        try {
-          hostname = new URL(tab.url).hostname;
-        } catch {
-          sendResponse({ ok: false, error: "Invalid tab URL" });
-          return;
-        }
-
-        const data = await chrome.storage.local.get(["papuExt_mapping"]);
-        const mapping =
-          data.papuExt_mapping?.[hostname] ||
-          data.papuExt_mapping?.[hostname.replace(/^www\./, "")] ||
-          data.papuExt_mapping?.["www." + hostname];
-        if (!mapping?.questionSelector) {
-          sendResponse({
-            ok: false,
-            error: `No mapping for "${hostname}". Open options, enter hostname, use Auto-detect or preset, then Save.`,
-          });
-          return;
-        }
-
-        const payload = msg.payload || {};
-        console.log('[Background] About to executeScript on tab:', tabId, 'URL:', tab.url);
-
-        // First test: inject a simple script to see if injection works at all
-        try {
-          await chrome.scripting.executeScript({
-            target: { tabId: tabId },
-            func: () => { console.log('[TEST] Simple script injection works!'); }
-          });
-          console.log('[Background] Test injection SUCCESS');
-        } catch (testError) {
-          console.error('[Background] Test injection FAILED:', testError);
-          sendResponse({ ok: false, error: "Cannot inject scripts: " + testError.message });
-          return;
-        }
-
-        let results;
-        try {
-          results = await chrome.scripting.executeScript({
-            target: { tabId: tabId },  // Removed allFrames: true
-            func: papuInjectedFill,
-            args: [payload, mapping],
-          });
-          console.log('[Background] executeScript SUCCESS, results:', results);
-        } catch (execError) {
-          console.error('[Background] executeScript FAILED:', execError);
-          sendResponse({ ok: false, error: "Script execution failed: " + execError.message });
-          return;
-        }
-
-        const diagnostics = (results || []).map((x) => x.result).filter(Boolean);
-        const diag = diagnostics.find((d) => {
-          const n = [d?.question, ...(d?.options || []), d?.correct].filter(Boolean).length;
-          return n > 0;
-        }) || diagnostics[0];
-        const okCount = [diag?.question, ...(diag?.options || []), diag?.correct].filter(Boolean).length;
-        const total = 1 + (payload?.options?.length || 0) + (payload?.correctAnswer ? 1 : 0);
-        if (okCount === 0) {
-          sendResponse({ ok: false, error: "No fields found. Check selectors in options." });
-        } else {
-          sendResponse({ ok: true, filled: okCount + "/" + total });
-        }
-      } catch (e) {
-        const err = e instanceof Error ? e.message : String(e);
-        sendResponse({ ok: false, error: err });
-      }
-    })();
-    return true;
-  }
-
-  // Handle CLICK_SAVE_AND_WAIT for bulk create
+  // Click save and wait
   if (msg?.type === "CLICK_SAVE_AND_WAIT") {
     (async () => {
       try {
         const tabId = msg.tabId;
         if (!tabId) {
-          sendResponse({ ok: false, error: "No tab ID provided" });
+          sendResponse({ ok: false, error: "No tab ID" });
           return;
         }
 
-        console.log("[Background] CLICK_SAVE_AND_WAIT starting for tab:", tabId);
-
-        // Get current URL before clicking
-        const tab = await chrome.tabs.get(tabId);
-        const originalUrl = tab.url;
-        console.log("[Background] Original URL:", originalUrl);
-
-        // Just click the save button - don't wait for navigation in injected script
-        console.log("[Background] About to executeScript...");
-        let results;
-        try {
-          results = await chrome.scripting.executeScript({
-            target: { tabId: tabId },
-            func: () => {
-            console.log("[Injected] Looking for save button...");
-            let saveBtn = null;
-
-            // Try common selectors
-            const selectors = [
-              'button[type="submit"]',
-              'input[type="submit"]',
-              'button.submit',
-              'button.btn-primary',
-            ];
-
-            for (const selector of selectors) {
-              const btn = document.querySelector(selector);
-              if (btn) {
-                saveBtn = btn;
-                console.log("[Injected] Found save button:", selector, btn.textContent?.slice(0, 30));
-                break;
-              }
-            }
-
-            // Try by text content
-            if (!saveBtn) {
-              const buttons = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-              saveBtn = buttons.find(btn =>
-                btn.textContent?.toLowerCase().includes('save') ||
-                btn.textContent?.includes('خەزن') ||
-                btn.textContent?.includes('حەزن') ||
-                btn.value?.toLowerCase().includes('save')
-              );
-            }
-
-            if (!saveBtn) {
-              console.error("[Injected] No save button found!");
-              return { ok: false, error: "Save button not found" };
-            }
-
-            console.log("[Injected] Clicking save button...");
-            saveBtn.click();
-            return { ok: true, clicked: true };
+        await chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          func: () => {
+            const saveBtn = document.querySelector('button[type="submit"], input[type="submit"], .btn-primary[type="submit"]');
+            if (saveBtn) saveBtn.click();
           }
         });
-        console.log("[Background] executeScript completed, results:", results);
 
-        } catch (execError) {
-          console.error("[Background] executeScript error:", execError);
-          sendResponse({ ok: false, error: "executeScript failed: " + (execError instanceof Error ? execError.message : String(execError)) });
-          return;
-        }
-
-        const clickResult = results?.[0]?.result;
-        console.log("[Background] Click result:", clickResult);
-
-        if (!clickResult?.ok) {
-          sendResponse({ ok: false, error: clickResult?.error || "Failed to click save" });
-          return;
-        }
-
-        // Now wait for URL change by polling
-        console.log("[Background] Waiting for URL change...");
-        let checkCount = 0;
-        const maxChecks = 40; // 20 seconds max (40 * 500ms)
-
-        while (checkCount < maxChecks) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          checkCount++;
-
-          const updatedTab = await chrome.tabs.get(tabId);
-          if (updatedTab.url !== originalUrl) {
-            console.log("[Background] URL changed to:", updatedTab.url);
-            sendResponse({ ok: true, newUrl: updatedTab.url });
-            return;
-          }
-        }
-
-        // Timeout but button was clicked - assume success
-        console.log("[Background] Timeout waiting for URL change, but button was clicked");
-        sendResponse({ ok: true, newUrl: null, timeout: true });
-
+        // Wait a bit for navigation
+        await new Promise(r => setTimeout(r, 2000));
+        sendResponse({ ok: true });
       } catch (e) {
-        console.error("[Background] CLICK_SAVE_AND_WAIT error:", e);
-        sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) });
+        sendResponse({ ok: false, error: String(e) });
       }
     })();
     return true;
   }
-
-  if (msg?.type !== "FILL_ACTIVE_TAB") return;
-
-  (async () => {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) {
-        sendResponse({ ok: false, error: "No active tab" });
-        return;
-      }
-
-      const url = tab.url || "";
-      let hostname = "";
-      try {
-        hostname = new URL(url).hostname;
-      } catch {
-        sendResponse({ ok: false, error: "Tab URL not available (restricted page?)" });
-        return;
-      }
-
-      const data = await chrome.storage.local.get(["papuExt_mapping"]);
-      const mapping =
-        data.papuExt_mapping?.[hostname] ||
-        data.papuExt_mapping?.[hostname.replace(/^www\./, "")] ||
-        data.papuExt_mapping?.["www." + hostname];
-      if (!mapping?.questionSelector || !Array.isArray(mapping.optionSelectors) || mapping.optionSelectors.length === 0) {
-        sendResponse({
-          ok: false,
-          error: `No mapping for "${hostname}". Open options, enter hostname, use Auto-detect or preset, then Save.`,
-        });
-        return;
-      }
-
-      const payload = msg.payload || {};
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
-        func: papuInjectedFill,
-        args: [payload, mapping],
-      });
-      const diagnostics = (results || []).map((x) => x.result).filter(Boolean);
-      const diag = diagnostics.find((d) => {
-        const n = [d?.question, ...(d?.options || []), d?.correct].filter(Boolean).length;
-        return n > 0;
-      }) || diagnostics[0];
-      const okCount = [diag?.question, ...(diag?.options || []), diag?.correct].filter(Boolean).length;
-      const total = 1 + (payload?.options?.length || 0) + (payload?.correctAnswer ? 1 : 0);
-      if (okCount === 0) {
-        sendResponse({ ok: false, error: "No fields found. Check selectors in options. Run Auto-detect on the form page. If the form is in an iframe, try again." });
-      } else {
-        sendResponse({ ok: true, filled: okCount + "/" + total });
-      }
-    } catch (e) {
-      const err = e instanceof Error ? e.message : String(e);
-      sendResponse({ ok: false, error: err });
-    }
-  })();
-
-  return true;
 });
+
+console.log('[Background] Loaded successfully');
+
+// ============================================
+// Injected functions
+// ============================================
+
+function papuDebugFields() {
+  const inputs = document.querySelectorAll('input, textarea, select');
+  const fields = [];
+  inputs.forEach(el => {
+    const tag = el.tagName?.toLowerCase() || "";
+    const type = el.type?.toLowerCase() || "";
+    const name = el.name || el.id || "";
+    if (name) {
+      fields.push({
+        tag,
+        type,
+        name,
+        id: el.id || "",
+        placeholder: el.placeholder || "",
+        visible: el.offsetParent !== null
+      });
+    }
+  });
+  return { fields, url: window.location.href };
+}
+
+function papuDetectSelectors() {
+  const textareas = Array.from(document.querySelectorAll('textarea'));
+  const inputs = Array.from(document.querySelectorAll('input[type="text"], input[type="search"]'));
+  const qCandidates = [...textareas, ...inputs].filter(el => el.offsetParent !== null);
+
+  const questionSelector = qCandidates[0]?.id
+    ? '#' + qCandidates[0].id
+    : qCandidates[0]?.name
+      ? '[name="' + qCandidates[0].name + '"]'
+      : 'textarea:first-of-type';
+
+  const optionInputs = Array.from(document.querySelectorAll('input[type="text"], input[type="radio"], input[type="checkbox"]'))
+    .filter(el => el.offsetParent !== null && el !== qCandidates[0]);
+
+  const optionSelectors = optionInputs.slice(0, 4).map(el =>
+    el.id ? '#' + el.id : el.name ? '[name="' + el.name + '"]' : 'input'
+  );
+
+  // Find correct answer checkboxes (IsCorrect checkboxes)
+  const checkboxes = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+  const correctCheckboxes = checkboxes.filter(el => {
+    const name = (el.name || '').toLowerCase();
+    const id = (el.id || '').toLowerCase();
+    return name.includes('iscorrect') || name.includes('is_correct') || name.includes('correct') ||
+           id.includes('iscorrect') || id.includes('is_correct') || id.includes('correct');
+  });
+
+  const correctAnswerCheckboxSelectors = correctCheckboxes.slice(0, 4).map(el =>
+    el.id ? '#' + el.id : el.name ? '[name="' + el.name + '"]' : 'input[type="checkbox"]'
+  );
+
+  return {
+    questionSelector,
+    optionSelectors,
+    correctAnswerCheckboxSelectors,
+    url: window.location.href
+  };
+}
+
+async function papuInjectedFill(payload, mapping) {
+  console.log('[Injected] Filling form...');
+
+  // Debug: Log ALL select elements on the page
+  const allSelects = Array.from(document.querySelectorAll('select'));
+  console.log('[Injected] All selects on page:', allSelects.map(s => ({
+    name: s.name,
+    id: s.id,
+    className: s.className,
+    value: s.value
+  })));
+
+  function findEl(selStr) {
+    if (!selStr) return null;
+    const parts = String(selStr).split(",").map(s => s.trim()).filter(Boolean);
+    for (const sel of parts) {
+      try {
+        const el = document.querySelector(sel);
+        if (el) return el;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  function setNativeValue(el, value) {
+    if (!el || value == null) return false;
+    el.focus?.();
+    const tag = el.tagName?.toUpperCase();
+    if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT") {
+      const stringValue = String(value);
+      el.value = stringValue;
+
+      // For SELECT, also try to find and select the matching option
+      if (tag === "SELECT") {
+        // First try direct value
+        let found = false;
+        for (const opt of el.options) {
+          if (opt.value === stringValue) {
+            opt.selected = true;
+            found = true;
+            break;
+          }
+        }
+        // If not found by value, try by text content
+        if (!found) {
+          for (const opt of el.options) {
+            if (opt.textContent?.trim() === stringValue || opt.textContent?.includes(stringValue)) {
+              opt.selected = true;
+              el.value = opt.value;
+              break;
+            }
+          }
+        }
+      }
+
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      el.dispatchEvent(new Event("blur", { bubbles: true }));
+      return true;
+    }
+    return false;
+  }
+
+  function stripQuestionNumber(s) {
+    if (!s || typeof s !== "string") return s;
+    return s
+      .replace(/^[٠-٩ٔ]+[\.\.\s\s]*/, "")
+      .replace(/^[0-9]+[\.\.\s\s]*/, "")
+      .trim();
+  }
+
+  function stripOptionLabel(s) {
+    if (!s || typeof s !== "string") return s;
+    return s
+      .replace(/^[A-Da-d][\.\)\:\s]+/, "")
+      .trim();
+  }
+
+  const found = { question: false, options: [], correct: false };
+
+  // Fill question text
+  if (mapping.questionSelector && payload.questionText) {
+    const el = findEl(mapping.questionSelector);
+    if (el) {
+      const cleanQuestionText = stripQuestionNumber(payload.questionText);
+      found.question = setNativeValue(el, cleanQuestionText);
+
+      // Handle question image
+      if (payload.questionImages && Array.isArray(payload.questionImages) && payload.questionImages.length > 0) {
+        if (el.tagName === "TEXTAREA") {
+          const imageUrl = payload.questionImages[0];
+          let absoluteUrl = imageUrl;
+          if (imageUrl.startsWith('/uploads/')) {
+            absoluteUrl = 'https://pepumangment-backend.danabestun.dev' + imageUrl;
+          }
+          console.log('[Fill] Question image - fetching from:', absoluteUrl);
+          try {
+            const imageResponse = await fetch(absoluteUrl);
+            if (imageResponse.ok) {
+              const blob = await imageResponse.blob();
+              const file = new File([blob], 'question_image.jpg', { type: blob.type || 'image/jpeg' });
+              const dataTransfer = new DataTransfer();
+              dataTransfer.items.add(file);
+              const dropEvent = new DragEvent('drop', {
+                bubbles: true,
+                cancelable: true,
+                dataTransfer: dataTransfer
+              });
+              el.dispatchEvent(dropEvent);
+              console.log('[Fill] Question image - dispatched drop event');
+              await new Promise(r => setTimeout(r, 1500));
+            }
+          } catch (err) {
+            console.error('[Fill] Failed to set question image:', err);
+          }
+        }
+      }
+    }
+  }
+
+  // Fill options
+  if (payload.options && Array.isArray(mapping.optionSelectors)) {
+    const choiceTextareas = mapping.optionSelectors.map(sel => findEl(sel)).filter(Boolean);
+
+    // Handle choice images
+    if (payload.choiceImages && typeof payload.choiceImages === 'object') {
+      for (const [idx, imageUrl] of Object.entries(payload.choiceImages)) {
+        const i = parseInt(idx, 10);
+        const targetTextarea = choiceTextareas[i];
+        if (targetTextarea) {
+          try {
+            let absoluteUrl = imageUrl;
+            if (imageUrl.startsWith('/uploads/')) {
+              absoluteUrl = 'https://pepumangment-backend.danabestun.dev' + imageUrl;
+            }
+            console.log(`[Fill] Choice ${i} - fetching image from:`, absoluteUrl);
+            const imageResponse = await fetch(absoluteUrl);
+            if (imageResponse.ok) {
+              const blob = await imageResponse.blob();
+              const file = new File([blob], `choice_${i}.jpg`, { type: 'image/jpeg' });
+              const dataTransfer = new DataTransfer();
+              dataTransfer.items.add(file);
+              const dropEvent = new DragEvent('drop', {
+                bubbles: true,
+                cancelable: true,
+                dataTransfer: dataTransfer
+              });
+              targetTextarea.dispatchEvent(dropEvent);
+              console.log(`[Fill] Choice ${i} - dispatched drop event`);
+              await new Promise(r => setTimeout(r, 1500));
+            }
+          } catch (err) {
+            console.error(`[Fill] Failed to set choice ${i} image:`, err);
+          }
+        }
+      }
+    }
+
+    // Fill option text
+    payload.options.forEach((opt, i) => {
+      const sel = mapping.optionSelectors[i];
+      if (sel) {
+        const el = findEl(sel);
+        if (el) {
+          found.options[i] = setNativeValue(el, opt);
+        }
+      }
+    });
+  }
+
+  // Fill correct answer with checkboxes
+  if (payload.correctAnswer) {
+    const checkboxSels = mapping.correctAnswerCheckboxSelectors || [];
+    const fallbackCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"][name*="IsCorrect"]'));
+
+    if (checkboxSels.length > 0 || fallbackCheckboxes.length > 0) {
+      const opts = (payload.options || []).map(stripOptionLabel);
+      const norm = (s) => String(s || "").trim().replace(/\s+/g, " ");
+      const want = norm(stripOptionLabel(payload.correctAnswer));
+      let idx = -1;
+
+      for (let i = 0; i < opts.length; i++) {
+        if (norm(opts[i]) === want) {
+          idx = i;
+          break;
+        }
+      }
+      if (idx < 0 && want) {
+        for (let i = 0; i < opts.length; i++) {
+          const o = norm(opts[i]);
+          if (o && (o.includes(want) || want.includes(o))) {
+            idx = i;
+            break;
+          }
+        }
+      }
+
+      if (idx >= 0) {
+        const checkbox = checkboxSels[idx] ? findEl(checkboxSels[idx]) : fallbackCheckboxes[idx];
+        if (checkbox) {
+          checkbox.checked = true;
+          checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+          found.correct = true;
+        }
+      }
+    }
+  }
+
+  // Set unit dropdown by index - NO EVENTS to avoid creating new entries
+  if (payload.unitNumber) {
+    const unitSelect = document.querySelector('select[name="Question.UnitId"], select[name="UnitId"], #UnitId');
+    if (unitSelect) {
+      const allOptions = Array.from(unitSelect.options);
+      const validOptions = allOptions.filter(opt => opt.value && opt.value !== "");
+      const unitIndex = parseInt(payload.unitNumber, 10);
+      if (unitIndex > 0 && unitIndex <= validOptions.length) {
+        const targetOption = validOptions[unitIndex - 1];
+        if (targetOption) {
+          unitSelect.value = targetOption.value;
+          console.log('[Injected] Set unit to:', targetOption.value, 'without events');
+        }
+      }
+    }
+  }
+
+  // Set difficulty - using radio buttons
+  if (payload.difficulty) {
+    console.log('[Injected] Looking for difficulty radio buttons, value to set:', payload.difficulty);
+
+    // Find all radio buttons for difficulty
+    const diffRadios = Array.from(document.querySelectorAll('input[type="radio"]')).filter(radio => {
+      const name = (radio.name || '').toLowerCase();
+      const id = (radio.id || '').toLowerCase();
+      return name.includes('difficulty') || id.includes('difficulty') ||
+             name.includes('qabar') || id.includes('qabar') ||
+             name.includes('level') || id.includes('level');
+    });
+
+    console.log('[Injected] Found difficulty radios:', diffRadios.map(r => ({ name: r.name, value: r.value, id: r.id })));
+
+    if (diffRadios.length > 0) {
+      // Map difficulty values (0.1, 0.3, 0.5, 0.7, 1.0) to radio button indices or values
+      // Usually: 0.1=easy/1st, 0.3=medium-easy/2nd, 0.5=medium/3rd, 0.7=hard/4th, 1.0=very-hard/5th
+      const diffValue = parseFloat(payload.difficulty);
+      let targetRadio = null;
+
+      // Try to find radio by value matching
+      targetRadio = diffRadios.find(r => parseFloat(r.value) === diffValue);
+
+      // If not found by value, try by index (0.1 -> 0th index, 0.3 -> 1st, etc.)
+      if (!targetRadio) {
+        const indexMap = { 0.1: 0, 0.3: 1, 0.5: 2, 0.7: 3, 1.0: 4 };
+        const index = indexMap[diffValue];
+        if (index !== undefined && diffRadios[index]) {
+          targetRadio = diffRadios[index];
+        }
+      }
+
+      if (targetRadio) {
+        targetRadio.checked = true;
+        // Try both click and change events
+        targetRadio.dispatchEvent(new Event("click", { bubbles: true }));
+        targetRadio.dispatchEvent(new Event("change", { bubbles: true }));
+        console.log('[Injected] Set difficulty radio to:', targetRadio.value, 'id:', targetRadio.id, 'checked:', targetRadio.checked);
+
+        // Verify it stayed checked
+        setTimeout(() => {
+          const stillChecked = document.getElementById(targetRadio.id);
+          console.log('[Injected] After 100ms - difficulty still checked:', stillChecked?.checked, 'value:', stillChecked?.value);
+        }, 100);
+      } else {
+        console.log('[Injected] Could not find matching radio for difficulty:', diffValue);
+      }
+    } else {
+      console.log('[Injected] No difficulty radio buttons found');
+    }
+  } else {
+    console.log('[Injected] No difficulty in payload');
+  }
+
+  // Set term - only if we have a valid term value
+  // DON'T trigger events to avoid creating new entries
+  if (payload.termId && payload.termId !== undefined && payload.termId !== null && payload.termId !== "") {
+    const termSelect =
+      document.querySelector('select[name="Question.TermId"]') ||
+      document.querySelector('select[name="TermId"]') ||
+      document.querySelector('#TermId') ||
+      document.querySelector('select[id*="term" i]') ||
+      document.querySelector('select[name*="term" i]');
+
+    if (termSelect) {
+      termSelect.value = String(payload.termId);
+      console.log('[Injected] Set term to:', payload.termId, 'without triggering events');
+    }
+  } else {
+    console.log('[Injected] Skipping term - no value provided');
+  }
+
+  return found;
+}

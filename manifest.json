@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Papu question autofill",
   "version": "1.4.0",
-  "description": "Fetch questions from Papu database and fill admin.pepu.krd forms. Includes Biology scraper.",
+  "description": "Fetch questions from Papu database and fill admin.pepu.krd forms.",
   "host_permissions": [
     "https://admin.pepu.krd/*",
     "https://www.admin.pepu.krd/*",
@@ -17,13 +17,6 @@
     "service_worker": "background.js"
   },
   "permissions": ["storage", "activeTab", "scripting", "tabs"],
-  "content_scripts": [
-    {
-      "matches": ["https://admin.pepu.krd/*", "https://www.admin.pepu.krd/*"],
-      "js": ["scraper.js"],
-      "run_at": "document_idle"
-    }
-  ],
   "options_ui": {
     "page": "options.html",
     "open_in_tab": true

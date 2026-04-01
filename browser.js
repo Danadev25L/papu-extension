@@ -4,6 +4,26 @@ const PROD_API_URL = "https://pepumangment-backend.danabestun.dev/api";
 const LOCAL_API_URL = "http://localhost:3001/api";
 const ALL = "__all__";
 
+// Global error handler - show errors on screen
+window.addEventListener('error', (e) => {
+  console.error('[Global Error]', e.message, e.filename, e.lineno, e.error);
+  showError(e.message + '\n' + (e.error?.stack || ''));
+});
+
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('[Unhandled Promise Rejection]', e.reason);
+  showError('Promise: ' + String(e.reason));
+});
+
+function showError(msg) {
+  const el = document.getElementById('errorDisplay');
+  if (el) {
+    el.textContent = msg;
+    el.style.display = 'block';
+    setTimeout(() => el.style.display = 'none', 10000);
+  }
+}
+
 function getExamYears() {
   const now = new Date();
   const endYear = now.getFullYear();
@@ -194,11 +214,28 @@ async function fillActive(payload, cardElement) {
         : state.choiceImages
     };
 
-    const res = await chrome.runtime.sendMessage({
-      type: "FILL_SPECIFIC_TAB",
-      tabId: targetTab.id,
-      payload: enrichedPayload
-    });
+    // Add retry logic for connection errors
+    let res;
+    let lastError;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        console.log(`[fillActive] Attempt ${attempt + 1}/3 to send message...`);
+        res = await chrome.runtime.sendMessage({
+          type: "FILL_SPECIFIC_TAB",
+          tabId: targetTab.id,
+          payload: enrichedPayload
+        });
+        break; // Success, exit retry loop
+      } catch (err) {
+        lastError = err;
+        console.warn(`[fillActive] Attempt ${attempt + 1} failed:`, err);
+        if (attempt < 2) {
+          // Wait before retry (except on last attempt)
+          await new Promise(r => setTimeout(r, 500));
+        }
+      }
+    }
 
     if (res?.ok) {
       showToast("✓ پڕکرایەوە!", "success");
@@ -207,9 +244,11 @@ async function fillActive(payload, cardElement) {
         cardElement.classList.toggle("filled");
       }
     } else {
-      showToast(res?.error || "هەڵە", "error");
+      const errorMsg = res?.error || lastError?.message || String(lastError) || "هەڵە";
+      console.error("[fillActive] Final error:", errorMsg);
+      showToast(errorMsg, "error");
     }
-    return res;
+    return res || { ok: false, error: lastError?.message || "Connection failed" };
   } catch (e) {
     console.error("Fill error:", e);
     showToast(e instanceof Error ? e.message : String(e), "error");
@@ -335,6 +374,24 @@ function renderQuestions() {
       card.style.border = "3px solid red";
       setTimeout(() => card.style.border = "", 500);
 
+      // Debug: log unit fields
+      console.log("[Card Click] Question unit data:", {
+        id: q.id,
+        unitNumber: q.unitNumber,
+        unit_number: q.unit_number,
+        unitNameKu: q.unitNameKu,
+        unit_name_ku: q.unit_name_ku,
+        unitId: q.unitId,
+        unit_id: q.unit_id
+      });
+
+      // Debug: log difficulty fields
+      console.log("[Card Click] Question difficulty data:", {
+        id: q.id,
+        difficulty: q.difficulty,
+        difficulty_level: q.difficulty_level
+      });
+
       await fillActive({
         questionId: q.id,
         questionText: q.questionText,
@@ -343,8 +400,8 @@ function renderQuestions() {
         unitNumber: q.unit_number || q.unitNumber || undefined,
         unitId: q.unit_id || q.unitId || undefined,
         unitNameKu: q.unit_name_ku || q.unitNameKu || undefined,
-        difficulty: q.difficulty,
-        termId: q.termId || state.adminTermId || undefined,
+        difficulty: q.difficulty || q.difficulty_level || undefined,
+        termId: state.adminTermId || undefined,  // Only use saved admin term, not question's term
         questionImages: q.questionImages || [],
         choiceImages: q.choiceImages || {}
       }, card);
@@ -443,6 +500,22 @@ async function bulkCreate() {
   const selectedIds = Array.from(state.selectedQuestions);
   const selectedQuestions = state.questions.filter(q => state.selectedQuestions.has(q.id));
 
+  // Get courseId from the current admin.pepu.krd tab
+  const allTabs = await chrome.tabs.query({});
+  const adminTab = allTabs.find(t =>
+    t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
+  );
+
+  let courseId = 16; // Default fallback
+  if (adminTab && adminTab.url) {
+    const match = adminTab.url.match(/courseId=(\d+)/i);
+    if (match) {
+      courseId = match[1];
+    }
+  }
+  console.log("[Bulk Create] Using courseId:", courseId);
+  const editUrl = `https://admin.pepu.krd/Courses/Questions/Edit?courseId=${courseId}`;
+
   console.log("[Bulk Create] Starting with questions:", selectedQuestions.map(q => q.id));
 
   // Show progress
@@ -458,11 +531,8 @@ async function bulkCreate() {
   let successCount = 0;
   let failCount = 0;
 
-  // Find target tab once
-  const tabs = await chrome.tabs.query({});
-  const targetTab = tabs.find(t =>
-    t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
-  );
+  // Use adminTab as targetTab
+  const targetTab = adminTab;
 
   if (!targetTab) {
     showToast("❌ admin.pepu.kرد تاب نەدۆزرایەوە", "error");
@@ -473,39 +543,34 @@ async function bulkCreate() {
 
   console.log("[Bulk Create] Target tab:", targetTab.url);
 
-  // === Get admin unit ID (for saving to database) ===
-  // Use selected admin unit, or get current value from form
-  let adminUnitId = state.adminUnitId;
-  if (!adminUnitId || adminUnitId === "") {
-    console.log("[Bulk Create] No admin unit selected, getting from form...");
-    const unitResult = await chrome.scripting.executeScript({
-      target: { tabId: targetTab.id },
-      func: () => {
-        const unitSelect = document.querySelector('select[name="Question.UnitId"]');
-        if (!unitSelect) return null;
-        // Get current value or first valid option
-        const currentValue = unitSelect.value;
-        if (currentValue && currentValue !== "" && parseInt(currentValue) > 0) {
-          return currentValue;
-        }
-        // Get first valid unit option
-        const firstOption = Array.from(unitSelect.options).find(opt =>
-          opt.value && opt.value !== "" && parseInt(opt.value) > 0
-        );
-        return firstOption?.value || null;
+  // === Get admin unit ID from the form (always read current selection) ===
+  console.log("[Bulk Create] Getting admin unit from form...");
+  const unitResult = await chrome.scripting.executeScript({
+    target: { tabId: targetTab.id },
+    func: () => {
+      const unitSelect = document.querySelector('select[name="Question.UnitId"]');
+      if (!unitSelect) return null;
+      // Get current value
+      const currentValue = unitSelect.value;
+      if (currentValue && currentValue !== "") {
+        return currentValue;
       }
-    });
-    if (unitResult?.[0]?.result) {
-      adminUnitId = unitResult[0].result;
-      console.log("[Bulk Create] Using admin unit from form:", adminUnitId);
+      // Get first valid unit option
+      const firstOption = Array.from(unitSelect.options).find(opt =>
+        opt.value && opt.value !== ""
+      );
+      return firstOption?.value || null;
     }
-  }
+  });
+
+  const adminUnitId = unitResult?.[0]?.result;
+  console.log("[Bulk Create] Admin unit from form:", adminUnitId);
 
   // Validate we have an admin unit ID (required for saving)
-  if (!adminUnitId || adminUnitId === "" || parseInt(adminUnitId) < 1) {
+  if (!adminUnitId || adminUnitId === "") {
     bulkProgress.style.display = "none";
     bulkCreateInProgress = false;
-    showToast("❌ یەکەیەکی دروست هەڵبژێرە! (Admin Unit required)", "error");
+    showToast("❌ تکایە لە فۆڕمی admin.pepu.krd یەکەیەک هەڵبژێرە!", "error");
     return;
   }
 
@@ -530,21 +595,67 @@ async function bulkCreate() {
       console.log("[Bulk Create] Options:", q.options);
 
       // FIRST: Set the admin unit dropdown (required for saving)
-      await chrome.scripting.executeScript({
+      // Wait for page to be ready if this isn't the first question
+      if (i > 0) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      const setUnitResult = await chrome.scripting.executeScript({
         target: { tabId: targetTab.id },
         func: (unitId) => {
           const unitSelect = document.querySelector('select[name="Question.UnitId"], select[name="UnitId"], #UnitId');
-          if (unitSelect) {
-            unitSelect.value = unitId;
-            unitSelect.dispatchEvent(new Event("change", { bubbles: true }));
-            console.log("[Bulk Create] Set admin unit to:", unitId);
+          if (!unitSelect) {
+            console.log("[Bulk Create] Unit dropdown NOT found!");
+            return { success: false, error: "Unit dropdown not found" };
           }
+          console.log("[Bulk Create] Unit dropdown found, options:", unitSelect.options.length);
+          unitSelect.value = unitId;
+          unitSelect.dispatchEvent(new Event("change", { bubbles: true }));
+          console.log("[Bulk Create] Set unit to:", unitId, "current value after set:", unitSelect.value);
+          return { success: true, value: unitSelect.value, options: unitSelect.options.length };
         },
         args: [adminUnitId]
       });
 
-      // ALSO: Set the term dropdown BEFORE filling (same as unit)
-      if (state.adminTermId) {
+      console.log("[Bulk Create] Set unit result:", setUnitResult?.[0]?.result);
+
+      // If unit setting failed, wait and try again
+      if (!setUnitResult?.[0]?.result?.success) {
+        console.log("[Bulk Create] Unit set failed, waiting and retrying...");
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        await chrome.scripting.executeScript({
+          target: { tabId: targetTab.id },
+          func: (unitId) => {
+            const unitSelect = document.querySelector('select[name="Question.UnitId"], select[name="UnitId"], #UnitId');
+            if (unitSelect) {
+              unitSelect.value = unitId;
+              unitSelect.dispatchEvent(new Event("change", { bubbles: true }));
+              console.log("[Bulk Create] Retry: Set unit to:", unitId);
+            }
+          },
+          args: [adminUnitId]
+        });
+      }
+
+      // ALSO: Set the term dropdown - use state.adminTermId OR read from form first time
+      let termToUse = state.adminTermId;
+      if (!termToUse && i === 0) {
+        // First question: read term from form if user selected one
+        const termResult = await chrome.scripting.executeScript({
+          target: { tabId: targetTab.id },
+          func: () => {
+            const termSelect = document.querySelector('select[name="Question.TermId"], select[name="TermId"], #TermId');
+            return termSelect?.value || "";
+          }
+        });
+        termToUse = termResult?.[0]?.result || "";
+        if (termToUse) {
+          console.log("[Bulk Create] Got term from form:", termToUse);
+          state.adminTermId = termToUse; // Save for subsequent questions
+        }
+      }
+
+      if (termToUse) {
         await chrome.scripting.executeScript({
           target: { tabId: targetTab.id },
           func: (termId) => {
@@ -555,13 +666,35 @@ async function bulkCreate() {
               console.log("[Bulk Create] Set termId to:", termId);
             }
           },
-          args: [state.adminTermId]
+          args: [termToUse]
         });
       }
 
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Log unit/term values before fill
+      const beforeFill = await chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        func: () => {
+          const unitSelect = document.querySelector('select[name="Question.UnitId"]');
+          const termSelect = document.querySelector('select[name="Question.TermId"]');
+          return {
+            unitValue: unitSelect?.value || "",
+            termValue: termSelect?.value || ""
+          };
+        }
+      });
+      console.log("[Bulk Create] Before fill - unit:", beforeFill?.[0]?.result?.unitValue, "term:", beforeFill?.[0]?.result?.termValue);
 
       // THEN: Fill the form using background script
+      // Log what we're sending
+      console.log("[Bulk Create] Question data:", {
+        id: q.id,
+        difficulty: q.difficulty,
+        difficulty_level: q.difficulty_level,
+        unitNumber: q.unit_number || q.unitNumber
+      });
+
       const fillResult = await chrome.runtime.sendMessage({
         type: "FILL_SPECIFIC_TAB",
         tabId: targetTab.id,
@@ -570,17 +703,35 @@ async function bulkCreate() {
           questionText: q.questionText,
           options: q.options || [],
           correctAnswer: q.correctAnswer || "",
-          unitId: adminUnitId, // Use admin unit ID for saving
-          difficulty: q.difficulty,
+          // Use question's own unit number for auto-selection
+          unitNumber: q.unit_number || q.unitNumber || undefined,
+          unitId: q.unit_id || q.unitId || undefined,
+          unitNameKu: q.unit_name_ku || q.unitNameKu || undefined,
+          difficulty: q.difficulty || q.difficulty_level || undefined,
           termId: state.adminTermId || q.termId || undefined,
           questionImages: q.questionImages || [],
-          choiceImages: q.choiceImages || {}
+          choiceImages: q.choiceImages || {},
+          bulkCreate: true // Flag to skip term auto-selection (unit uses question's unitNumber)
         }
       });
 
       console.log("[Bulk Create] Fill result:", fillResult);
       console.log("[Bulk Create] Fill OK?:", fillResult?.ok);
       console.log("[Bulk Create] Fields filled:", fillResult?.filled);
+
+      // Log unit/term values after fill
+      const afterFill = await chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        func: () => {
+          const unitSelect = document.querySelector('select[name="Question.UnitId"]');
+          const termSelect = document.querySelector('select[name="Question.TermId"]');
+          return {
+            unitValue: unitSelect?.value || "",
+            termValue: termSelect?.value || ""
+          };
+        }
+      });
+      console.log("[Bulk Create] After fill - unit:", afterFill?.[0]?.result?.unitValue, "term:", afterFill?.[0]?.result?.termValue);
 
       if (!fillResult?.ok) {
         console.error("[Bulk Create] Fill failed:", fillResult);
@@ -594,32 +745,26 @@ async function bulkCreate() {
       // Wait for form to be filled
       await new Promise(resolve => setTimeout(resolve, 800));
 
-      // === Verify admin unit is set before submitting ===
+      // === Verify unit is set before submitting ===
       const unitCheck = await chrome.scripting.executeScript({
         target: { tabId: targetTab.id },
-        func: (expectedUnit) => {
+        func: () => {
           const unitSelect = document.querySelector('select[name="Question.UnitId"], select[name="UnitId"], #UnitId');
           if (!unitSelect) return { ok: false, error: "Unit dropdown not found" };
           const currentValue = unitSelect.value;
-          const isValid = currentValue && currentValue !== "" && parseInt(currentValue) > 0;
-          if (!isValid) {
-            // Try to set it again
-            unitSelect.value = expectedUnit;
-            unitSelect.dispatchEvent(new Event("change", { bubbles: true }));
-          }
+          const selectedText = unitSelect.options[unitSelect.selectedIndex]?.text || "";
           return {
-            ok: currentValue && currentValue !== "" && parseInt(currentValue) > 0,
+            ok: currentValue && currentValue !== "",
             currentValue,
-            expectedUnit
+            selectedText
           };
-        },
-        args: [adminUnitId]
+        }
       });
 
-      console.log("[Bulk Create] Admin unit check:", unitCheck?.[0]?.result);
+      console.log("[Bulk Create] Unit check:", unitCheck?.[0]?.result);
       if (!unitCheck?.[0]?.result?.ok) {
-        console.error("[Bulk Create] Admin unit validation failed!");
-        showToast(`❌ یەکەی (Unit) دروست نییە`, "error");
+        console.error("[Bulk Create] Unit validation failed!");
+        showToast(`❌ Unit not selected!`, "error");
         failCount++;
         card?.classList.remove("bulk-processing");
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -751,10 +896,36 @@ async function bulkCreate() {
 
             // Navigate back to edit page for next question
             await new Promise(resolve => setTimeout(resolve, 1000));
-            await chrome.tabs.update(targetTab.id, {
-              url: `https://admin.pepu.krd/Courses/Questions/Edit?courseId=16`
-            });
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await chrome.tabs.update(targetTab.id, { url: editUrl });
+
+            // Wait for the page to be ready - check if unit dropdown exists
+            let pageReady = false;
+            for (let attempts = 0; attempts < 20; attempts++) {
+              await new Promise(resolve => setTimeout(resolve, 500));
+              const readyCheck = await chrome.scripting.executeScript({
+                target: { tabId: targetTab.id },
+                func: () => {
+                  const unitSelect = document.querySelector('select[name="Question.UnitId"]');
+                  const questionTextarea = document.querySelector('textarea[name="Question.Content"]');
+                  return {
+                    hasUnitSelect: !!unitSelect,
+                    hasQuestionTextarea: !!questionTextarea,
+                    unitOptions: unitSelect ? Array.from(unitSelect.options).length : 0
+                  };
+                }
+              });
+              const ready = readyCheck?.[0]?.result;
+              if (ready?.hasUnitSelect && ready?.hasQuestionTextarea && ready?.unitOptions > 1) {
+                console.log("[Bulk Create] Page is ready! unitOptions:", ready.unitOptions);
+                pageReady = true;
+                break;
+              }
+              console.log("[Bulk Create] Waiting for page... attempt", attempts + 1);
+            }
+
+            if (!pageReady) {
+              console.warn("[Bulk Create] Page might not be fully ready, continuing anyway...");
+            }
 
             break;
           }
@@ -916,11 +1087,13 @@ function assignDifficultyToQuestions(questions) {
     // Assign hard difficulty to first batch
     shuffled.slice(0, hardCount).forEach(q => {
       q.difficulty = Math.random() > 0.5 ? 0.7 : 1.0;
+      q.difficulty_level = q.difficulty; // Also set alternative field name
     });
 
     // Assign easy/medium to rest (0.1, 0.3, or 0.5)
     shuffled.slice(hardCount).forEach(q => {
       q.difficulty = difficulties[Math.floor(Math.random() * 3)];
+      q.difficulty_level = q.difficulty; // Also set alternative field name
     });
   });
 
@@ -1145,6 +1318,30 @@ async function init() {
 
   // Select all button
   document.getElementById("selectAllBtn").addEventListener("click", toggleSelectAll);
+
+  // Test connection button
+  document.getElementById("testConnBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("testConnBtn");
+    const originalText = btn.textContent;
+    btn.textContent = "⏳...";
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "PING" });
+      if (response?.pong) {
+        btn.textContent = "✓ Connected!";
+        console.log("[TestConn] Background script is responding");
+        showToast("✓ Background script connected", "success");
+      } else {
+        btn.textContent = "✗ No response";
+        console.error("[TestConn] Background did not respond with pong");
+        showToast("Background script not responding", "error");
+      }
+    } catch (e) {
+      btn.textContent = "✗ Error";
+      console.error("[TestConn] Connection error:", e);
+      showToast("Connection error: " + e.message, "error");
+    }
+    setTimeout(() => { btn.textContent = originalText; }, 2000);
+  });
 
   document.getElementById("refreshTermsBtn").addEventListener("click", async () => {
     const btn = document.getElementById("refreshTermsBtn");
