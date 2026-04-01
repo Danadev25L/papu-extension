@@ -851,20 +851,10 @@ async function bulkCreate() {
 
           console.log("[Submit] Found save button:", saveBtn.textContent, saveBtn.outerHTML.slice(0, 200));
 
-          // Use a direct approach - focus then click
-          saveBtn.focus();
+          // Click the save button ONCE
           saveBtn.click();
 
-          // Also try to dispatch click on the button
-          setTimeout(() => {
-            saveBtn.dispatchEvent(new MouseEvent('click', {
-              bubbles: true,
-              cancelable: true,
-              view: window
-            }));
-          }, 100);
-
-          return { ok: true, method: "button.focus+click", buttonText: saveBtn.textContent };
+          return { ok: true, method: "button.click", buttonText: saveBtn.textContent };
         }
       });
 
