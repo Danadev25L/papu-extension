@@ -535,6 +535,23 @@ async function bulkCreate() {
         },
         args: [adminUnitId]
       });
+
+      // ALSO: Set the term dropdown BEFORE filling (same as unit)
+      if (state.adminTermId) {
+        await chrome.scripting.executeScript({
+          target: { tabId: targetTab.id },
+          func: (termId) => {
+            const termSelect = document.querySelector('select[name="Question.TermId"], select[name="TermId"], #TermId');
+            if (termSelect) {
+              termSelect.value = termId;
+              termSelect.dispatchEvent(new Event("change", { bubbles: true }));
+              console.log("[Bulk Create] Set termId to:", termId);
+            }
+          },
+          args: [state.adminTermId]
+        });
+      }
+
       await new Promise(resolve => setTimeout(resolve, 300));
 
       // THEN: Fill the form using background script
@@ -600,6 +617,35 @@ async function bulkCreate() {
         card?.classList.remove("bulk-processing");
         await new Promise(resolve => setTimeout(resolve, 1000));
         continue;
+      }
+
+      // === Verify term is set if adminTermId is selected ===
+      if (state.adminTermId) {
+        const termCheck = await chrome.scripting.executeScript({
+          target: { tabId: targetTab.id },
+          func: (expectedTerm) => {
+            const termSelect = document.querySelector('select[name="Question.TermId"], select[name="TermId"], #TermId');
+            if (!termSelect) return { ok: false, error: "Term dropdown not found" };
+            const currentValue = termSelect.value;
+            const isValid = currentValue && currentValue !== "";
+            if (!isValid || currentValue !== expectedTerm) {
+              // Try to set it again
+              termSelect.value = expectedTerm;
+              termSelect.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+            return {
+              ok: currentValue && currentValue !== "" && currentValue === expectedTerm,
+              currentValue,
+              expectedTerm
+            };
+          },
+          args: [state.adminTermId]
+        });
+
+        console.log("[Bulk Create] Term check:", termCheck?.[0]?.result);
+        if (!termCheck?.[0]?.result?.ok) {
+          console.warn("[Bulk Create] Term validation failed, but continuing...");
+        }
       }
 
       // Click the save button using injected script - try multiple methods
@@ -823,7 +869,7 @@ async function loadTermsFromForm() {
           return Array.from(termSelect.options).map(opt => ({
             value: opt.value,
             label: opt.textContent?.trim() || opt.value || "Unknown"
-          })).filter(t => t.value && t.value !== "");
+          })).filter(t => t.value && t.value !== "" && parseInt(t.value) > 0);
         },
       });
       if (results && results[0] && results[0].result) {
