@@ -118,12 +118,25 @@ async function papuInjectedFill(payload, mapping) {
     console.log('[Fill] Skipping question - qSel:', !!qSel, 'questionText:', !!payload.questionText);
   }
 
-  // Set unit if provided in payload
-  if (payload.unitId) {
-    const unitSelect = document.querySelector('select[name="Question.UnitId"], select[name="UnitId"], #UnitId');
-    if (unitSelect) {
-      setNativeValue(unitSelect, payload.unitId);
-      console.log("[Fill] Set unit to:", payload.unitId);
+  // Set unit dropdown - use unitNumber as index (unit 2 = 2nd option)
+  const unitSelect = document.querySelector('select[name="Question.UnitId"], select[name="UnitId"], #UnitId');
+  console.log("[Fill] Unit dropdown found:", !!unitSelect, "payload.unitNumber:", payload.unitNumber);
+
+  if (unitSelect && payload.unitNumber) {
+    const allOptions = Array.from(unitSelect.options);
+    // Filter out empty/placeholder options
+    const validOptions = allOptions.filter(opt => opt.value && opt.value !== "");
+    const unitIndex = parseInt(payload.unitNumber, 10);
+
+    console.log("[Fill] Total options:", allOptions.length, "Valid options:", validOptions.length, "Unit index:", unitIndex);
+
+    // Select by index - unit 2 = 2nd valid option
+    if (unitIndex > 0 && unitIndex <= validOptions.length) {
+      const targetOption = validOptions[unitIndex - 1]; // -1 because array is 0-indexed
+      if (targetOption) {
+        setNativeValue(unitSelect, targetOption.value);
+        console.log("[Fill] Set unit by index - unit", unitIndex, "= option value:", targetOption.value, "text:", targetOption.textContent?.slice(0, 30));
+      }
     }
   }
 
@@ -170,6 +183,10 @@ async function papuInjectedFill(payload, mapping) {
     found.options.push(result);
     console.log('[Fill] Option', i, 'element:', el?.name, 'result:', result);
   });
+
+  // Debug: log question data to see what unit fields exist
+  console.log('[Fill Debug] Full payload keys:', Object.keys(payload));
+  console.log('[Fill Debug] payload:', JSON.stringify(payload, null, 2));
 
   // Handle choice images - fetch image and simulate drop/paste event
   console.log('[Fill] choiceImages payload:', payload.choiceImages, 'keys:', Object.keys(payload.choiceImages || {}));

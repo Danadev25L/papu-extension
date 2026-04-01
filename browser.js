@@ -178,7 +178,12 @@ async function fillActive(payload, cardElement) {
     // Use payload.choiceImages (from question) first, fallback to state (user uploaded)
     const enrichedPayload = {
       ...payload,
-      unitId: unitIdForSave, // Use admin unit ID for saving
+      // Preserve unit fields from question for auto-selection
+      unitNumber: payload.unitNumber,
+      unitId: payload.unitId,
+      unitNameKu: payload.unitNameKu,
+      // For bulk create, override unitId with admin selection
+      unitIdForSave: unitIdForSave,
       difficulty: payload.difficulty || undefined,
       termId: payload.termId || state.adminTermId || undefined,
       questionImages: (payload.questionImages && payload.questionImages.length > 0)
@@ -335,7 +340,9 @@ function renderQuestions() {
         questionText: q.questionText,
         options: q.options || [],
         correctAnswer: q.correctAnswer || "",
-        unitId: state.unitId || undefined,
+        unitNumber: q.unit_number || q.unitNumber || undefined,
+        unitId: q.unit_id || q.unitId || undefined,
+        unitNameKu: q.unit_name_ku || q.unitNameKu || undefined,
         difficulty: q.difficulty,
         termId: q.termId || state.adminTermId || undefined,
         questionImages: q.questionImages || [],
@@ -940,7 +947,6 @@ async function loadQuestions() {
   const params = new URLSearchParams();
   if (state.examYear && state.examYear !== ALL) params.set("examYear", state.examYear);
   if (state.examPeriod && state.examPeriod !== ALL) params.set("examPeriod", state.examPeriod);
-  if (state.adminUnitId) params.set("adminUnitId", state.adminUnitId);
   const qs = params.toString();
   const path = `/extension/subjects/${state.subjectId}/questions${qs ? "?" + qs : ""}`;
   const data = await apiFetch(path);
@@ -1041,28 +1047,11 @@ async function init() {
       false
     );
     fillSelect(document.getElementById("filterUnit"), [{ value: "", label: "هەڵبژێرە بەند" }], false);
-    fillSelect(document.getElementById("filterAdminUnit"), [{ value: "", label: "هەڵبژێرە بەند" }], false);
   } catch (e) {
     console.error("Failed to load subjects:", e);
   }
 
-  // Load admin units from form (optional, don't hide if fails)
-  try {
-    const adminUnits = await loadUnitsFromForm();
-    if (adminUnits.length > 0) {
-      fillSelect(
-        document.getElementById("filterAdminUnit"),
-        [{ value: "", label: "هەڵبژێرە بەند" }, ...adminUnits],
-        false
-      );
-    }
-    document.getElementById("adminUnitFilterWrapper").style.display = "flex";
-  } catch (e) {
-    console.log("Failed to load admin units from form:", e);
-    document.getElementById("adminUnitFilterWrapper").style.display = "flex";
-  }
-
-  // Load admin terms from form (for uploading, like admin units)
+  // Load admin terms from form (for uploading)
   try {
     const adminTerms = await loadTermsFromForm();
     if (adminTerms.length > 0) {
@@ -1146,35 +1135,6 @@ async function init() {
     }
   });
 
-  document.getElementById("filterAdminUnit").addEventListener("change", async (e) => {
-    state.adminUnitId = e.target.value;
-    // Sync to admin.pepu.krd form
-    if (e.target.value) {
-      try {
-        const tabs = await chrome.tabs.query({});
-        const adminTab = tabs.find(t =>
-          t.url && (t.url.includes("admin.pepu.krd") || t.url.includes("www.admin.pepu.krd"))
-        );
-        if (adminTab) {
-          await chrome.scripting.executeScript({
-            target: { tabId: adminTab.id },
-            func: (unitId) => {
-              const unitSelect = document.querySelector('select[name="Question.UnitId"]');
-              if (unitSelect) {
-                unitSelect.value = unitId;
-                unitSelect.dispatchEvent(new Event("change", { bubbles: true }));
-              }
-            },
-            args: [e.target.value]
-          });
-        }
-      } catch (err) {
-        console.log("Failed to sync admin unit:", err);
-      }
-    }
-    refreshQuestions();
-  });
-
   document.getElementById("searchInput").addEventListener("input", renderQuestions);
 
   // Bulk create button
@@ -1185,25 +1145,6 @@ async function init() {
 
   // Select all button
   document.getElementById("selectAllBtn").addEventListener("click", toggleSelectAll);
-
-  document.getElementById("refreshUnitsBtn").addEventListener("click", async () => {
-    const btn = document.getElementById("refreshUnitsBtn");
-    const originalText = btn.textContent;
-    btn.textContent = "⏳...";
-    try {
-      const units = await loadUnitsFromForm();
-      fillSelect(
-        document.getElementById("filterAdminUnit"),
-        [{ value: "", label: "هەڵبژێرە بەند" }, ...units],
-        false
-      );
-      btn.textContent = "✓ Done!";
-      setTimeout(() => { btn.textContent = originalText; }, 1500);
-    } catch (e) {
-      btn.textContent = "Error!";
-      setTimeout(() => { btn.textContent = originalText; }, 1500);
-    }
-  });
 
   document.getElementById("refreshTermsBtn").addEventListener("click", async () => {
     const btn = document.getElementById("refreshTermsBtn");
