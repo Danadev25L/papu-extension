@@ -1116,8 +1116,10 @@ async function loadQuestions() {
   let questions = data.questions || [];
 
   // Client-side filter by our unitId
+  // Include questions WITHOUT units so they can be assigned
   if (state.unitId) {
     questions = questions.filter(q =>
+      !q.unitId || !q.unit_id || // Include questions without units
       q.unitId === state.unitId || q.unitId2 === state.unitId ||
       q.unit_id === state.unitId
     );
