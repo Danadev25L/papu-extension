@@ -19,7 +19,7 @@ const EXAM_PERIODS = [
   { value: "second_term", label: "قۆناغی دووەم" },
 ];
 
-let state = { subjects: [], questions: [], subjectId: "", examYear: "", examPeriod: "", unitId: "" };
+let state = { subjects: [], questions: [], subjectId: "", examYear: "", examPeriod: "", unitId: "", filterMode: "include" }; // "include" or "exclude"
 let selectedIndex = -1;
 let selectedIndices = new Set();
 
@@ -200,18 +200,33 @@ async function loadQuestions() {
   const params = new URLSearchParams();
   if (state.examYear && state.examYear !== ALL) params.set("examYear", state.examYear);
   if (state.examPeriod && state.examPeriod !== ALL) params.set("examPeriod", state.examPeriod);
+
+  // Add filter mode parameter
+  if (state.unitId) {
+    if (state.filterMode === "exclude") {
+      params.set("excludeUnitId", state.unitId);
+    } else {
+      params.set("unitId", state.unitId);
+    }
+  }
+
   const qs = params.toString();
   const path = `/extension/subjects/${state.subjectId}/questions${qs ? "?" + qs : ""}`;
   const data = await apiFetch(path);
   let questions = data.questions || [];
 
-  // Client-side filter by our unitId
-  // Include questions WITHOUT units so they can be assigned
-  if (state.unitId) {
+  // Client-side filter by our unitId (for backward compatibility)
+  if (state.unitId && state.filterMode === "include") {
     questions = questions.filter(q =>
       !q.unitId || !q.unit_id || // Include questions without units
       q.unitId === state.unitId || q.unitId2 === state.unitId ||
       q.unit_id === state.unitId
+    );
+  } else if (state.unitId && state.filterMode === "exclude") {
+    // Exclude questions with this unit (already done by API, but double-check)
+    questions = questions.filter(q =>
+      q.unitId !== state.unitId && q.unitId2 !== state.unitId &&
+      q.unit_id !== state.unitId
     );
   }
 
@@ -318,7 +333,20 @@ async function init() {
 
   document.getElementById("filterUnit").addEventListener("change", (e) => {
     state.unitId = e.target.value;
+    const modeSection = document.getElementById("filterModeSection");
+    modeSection.style.display = state.unitId ? "grid" : "none";
     refreshQuestions();
+  });
+
+  // Filter mode radio buttons
+  const filterModeInputs = document.querySelectorAll('input[name="filterMode"]');
+  filterModeInputs.forEach(input => {
+    input.addEventListener("change", (e) => {
+      if (e.target.checked) {
+        state.filterMode = e.target.value;
+        refreshQuestions();
+      }
+    });
   });
 
   document.getElementById("openBrowserBtn").addEventListener("click", async () => {
