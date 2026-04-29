@@ -382,43 +382,62 @@ async function papuInjectedFill(payload, mapping) {
     }
 
     // Fill option text
+    console.log('[Fill] Raw options:', JSON.stringify(payload.options));
     payload.options.forEach((opt, i) => {
       const sel = mapping.optionSelectors[i];
       if (sel) {
         const el = findEl(sel);
         if (el) {
-          found.options[i] = setNativeValue(el, opt);
+          // Handle both string options and object options {text, image, value}
+          const optText = typeof opt === "object" && opt !== null ? (opt.text || opt.label || "") : opt;
+          console.log(`[Fill] Option ${i}: type=${typeof opt}, text="${optText}"`);
+          found.options[i] = setNativeValue(el, optText);
         }
       }
     });
   }
 
   // Fill correct answer with checkboxes
+  console.log('[Fill] Correct answer:', payload.correctAnswer, 'type:', typeof payload.correctAnswer);
   if (payload.correctAnswer) {
     const checkboxSels = mapping.correctAnswerCheckboxSelectors || [];
     const fallbackCheckboxes = Array.from(document.querySelectorAll('input[type="checkbox"][name*="IsCorrect"]'));
 
     if (checkboxSels.length > 0 || fallbackCheckboxes.length > 0) {
-      const opts = (payload.options || []).map(stripOptionLabel);
+      // Extract text from object options {text, image, value}
+      const opts = (payload.options || []).map(opt => {
+        const text = typeof opt === "object" && opt !== null ? (opt.text || opt.label || "") : opt;
+        return stripOptionLabel(text);
+      });
       const norm = (s) => String(s || "").trim().replace(/\s+/g, " ");
-      const want = norm(stripOptionLabel(payload.correctAnswer));
-      let idx = -1;
 
-      for (let i = 0; i < opts.length; i++) {
-        if (norm(opts[i]) === want) {
-          idx = i;
-          break;
-        }
+      // correctAnswer can be a value like "1","2","3","4" or the actual text
+      let idx = -1;
+      if (/^\d+$/.test(payload.correctAnswer)) {
+        idx = parseInt(payload.correctAnswer, 10) - 1;
       }
-      if (idx < 0 && want) {
+
+      // If not matched by value, try matching by text
+      if (idx < 0) {
+        const want = norm(stripOptionLabel(payload.correctAnswer));
         for (let i = 0; i < opts.length; i++) {
-          const o = norm(opts[i]);
-          if (o && (o.includes(want) || want.includes(o))) {
+          if (norm(opts[i]) === want) {
             idx = i;
             break;
           }
         }
+        if (idx < 0 && want) {
+          for (let i = 0; i < opts.length; i++) {
+            const o = norm(opts[i]);
+            if (o && (o.includes(want) || want.includes(o))) {
+              idx = i;
+              break;
+            }
+          }
+        }
       }
+
+      console.log('[Fill] Correct answer index:', idx);
 
       if (idx >= 0) {
         const checkbox = checkboxSels[idx] ? findEl(checkboxSels[idx]) : fallbackCheckboxes[idx];
@@ -482,16 +501,18 @@ async function papuInjectedFill(payload, mapping) {
       }
 
       if (targetRadio) {
-        targetRadio.checked = true;
-        // Try both click and change events
-        targetRadio.dispatchEvent(new Event("click", { bubbles: true }));
-        targetRadio.dispatchEvent(new Event("change", { bubbles: true }));
+        // Use .click() to trigger the framework's native handler
+        targetRadio.click();
         console.log('[Injected] Set difficulty radio to:', targetRadio.value, 'id:', targetRadio.id, 'checked:', targetRadio.checked);
 
         // Verify it stayed checked
         setTimeout(() => {
           const stillChecked = document.getElementById(targetRadio.id);
-          console.log('[Injected] After 100ms - difficulty still checked:', stillChecked?.checked, 'value:', stillChecked?.value);
+          if (stillChecked && !stillChecked.checked) {
+            console.log('[Injected] Radio was reset, retrying with click...');
+            stillChecked.click();
+          }
+          console.log('[Injected] After 100ms - difficulty checked:', stillChecked?.checked, 'value:', stillChecked?.value);
         }, 100);
       } else {
         console.log('[Injected] Could not find matching radio for difficulty:', diffValue);
